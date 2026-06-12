@@ -10,6 +10,20 @@ log_msg() {
 
 log_msg "=== MiMo Code 卸载开始 ==="
 
+# 0. 杀死运行中的进程（防止卸载后进程残留）
+for pid_file in "${TRIM_PKGVAR}/wrapper.pid" "${TRIM_PKGVAR}/mimo.pid" "${TRIM_PKGVAR}/wrapper.pid" "${TRIM_PKGVAR}/mimo.pid"; do
+    if [ -f "$pid_file" ]; then
+        pid=$(cat "$pid_file" 2>/dev/null || true)
+        [ -n "$pid" ] && kill "$pid" 2>/dev/null || true
+        rm -f "$pid_file"
+    fi
+done
+pkill -f "uwrapper.py" 2>/dev/null || true
+pkill -f "mimo web" 2>/dev/null || true
+pkill -f "mimo serve" 2>/dev/null || true
+sleep 1
+log_msg "已清理运行中的进程"
+
 # 1. 清理系统级软链（stop 不会删，卸载时才删）
 if [ -L "/usr/local/bin/mimo" ]; then
     rm -f "/usr/local/bin/mimo" 2>/dev/null || true

@@ -1,15 +1,16 @@
-/* MiMo Code Deep Integration v0.4.0 — Frontend SPA */
+/* MiMo Code Deep Integration v0.5.0 — Enhanced Frontend SPA */
 const $ = s => document.querySelector(s);
 const $$ = s => document.querySelectorAll(s);
 const host = location.hostname;
 const content = $('#content');
 let currentView = 'dashboard';
 
-// Toast
+// Toast notification
 function toast(msg, type = 'success') {
   const t = document.createElement('div');
   t.className = 'toast ' + type;
-  t.textContent = msg;
+  const icon = { success: '✅', error: '❌', info: 'ℹ️', warn: '⚠️' }[type] || '';
+  t.innerHTML = icon + ' ' + msg;
   t.onclick = () => t.remove();
   document.body.appendChild(t);
   setTimeout(() => t.remove(), 4000);
@@ -19,6 +20,10 @@ function toast(msg, type = 'success') {
 async function api(path, opts) {
   try {
     const r = await fetch('/api/' + path, opts);
+    if (!r.ok) {
+      const err = await r.text().catch(() => '');
+      return { error: `HTTP ${r.status}: ${err.slice(0, 200)}` };
+    }
     return await r.json();
   } catch (e) {
     return { error: e.message };
@@ -31,6 +36,15 @@ function navigate(view) {
   $$('.nav-item').forEach(n => {
     n.classList.toggle('active', n.dataset.view === view);
   });
+  const fns = {
+    dashboard: renderDashboard,
+    providers: renderProviders,
+    sessions: renderSessions,
+    stats: renderStats,
+    settings: renderSettings,
+    upgrade: renderUpgrade,
+    logs: renderLogs,
+  };
   if (view === 'chat') {
     content.innerHTML = '';
     const iframe = document.createElement('iframe');
@@ -39,9 +53,7 @@ function navigate(view) {
     content.appendChild(iframe);
     return;
   }
-  const fn = { dashboard: renderDashboard, providers: renderProviders,
-               sessions: renderSessions, stats: renderStats,
-               settings: renderSettings, upgrade: renderUpgrade }[view];
+  const fn = fns[view];
   if (fn) fn();
 }
 
@@ -54,8 +66,6 @@ $$('.nav-item').forEach(n => {
 async function renderDashboard() {
   content.innerHTML = '<div class="dashboard"><div class="loading">加载中...</div></div>';
   const data = await api('status');
-  const models = data.models || [];
-  const ver = data.version || 'unknown';
   const running = data.mimo_web;
 
   const dot = $('#statusDot');
@@ -67,17 +77,17 @@ async function renderDashboard() {
         <div class="dash-card ${running ? 'green' : 'red'}">
           <h3>服务状态</h3>
           <div class="value">${running ? '运行中' : '已停止'}</div>
-          <div class="sub">PID: ${data.mimo_web_pid || '-'} | 端口 5669</div>
+          <div class="sub">PID: ${data.mimo_web_pid || '-'} | 端口 ${data.mimo_port_open ? '✓ 5669' : '✗ 5669'}</div>
         </div>
         <div class="dash-card accent">
-          <h3>版本</h3>
-          <div class="value">v${ver}</div>
-          <div class="sub">MiMo Code</div>
+          <h3>MiMo Code 版本</h3>
+          <div class="value">v${data.version || '?'}</div>
+          <div class="sub">包装器 v0.5.0 | 运行 ${data.uptime || '-'}</div>
         </div>
         <div class="dash-card yellow">
           <h3>可用模型</h3>
           <div class="value">${data.models_count || 0}</div>
-          <div class="sub">已加载模型数量</div>
+          <div class="sub">已加载 Provider 模型数量</div>
         </div>
         <div class="dash-card">
           <h3>快捷操作</h3>
@@ -85,331 +95,406 @@ async function renderDashboard() {
             <button class="btn btn-primary btn-sm" onclick="navigate('chat')">💬 新建会话</button>
             <button class="btn btn-ghost btn-sm" onclick="navigate('sessions')">📋 历史会话</button>
             <button class="btn btn-ghost btn-sm" onclick="navigate('providers')">🔑 Provider</button>
+            <button class="btn btn-ghost btn-sm" onclick="navigate('upgrade')">⬆ 检查更新</button>
           </div>
         </div>
       </div>
-      <div class="section-title">可用模型</div>
-      <div class="model-list">
-        ${models.length === 0 ? '<div style="color:var(--text-muted);padding:12px;">暂无模型信息</div>' :
-          models.slice(0, 10).map(m => {
-            const d = m.details || {};
-            const tags = (d.tags || []).join(' ');
-            const costInfo = d.cost ? `输入 \$${d.cost.input}/M • 输出 \$${d.cost.output}/M` : '';
-            return `<div class="model-item">
-              <div class="model-name">${m.id}</div>
-              <div class="model-meta">
-                ${d.provider ? `<span>${d.provider}</span>` : ''}
-                <span>${Math.round((d.limit?.context || 0) / 1000)}K ctx</span>
-                ${costInfo ? `<span>${costInfo}</span>` : ''}
-                ${d.free ? '<span class="model-tag free">免费</span>' : ''}
-              </div>
-            </div>`;
-          }).join('')
-        }
-        ${models.length > 10 ? `<div style="color:var(--text-muted);font-size:12px;padding:8px 0;">…还有 ${models.length - 10} 个模型</div>` : ''}
+      <div class="info-banner">
+        <strong>💡 提示：</strong>需要帮助？会话按钮、查看文档。
+        <button class="btn btn-ghost btn-xs" onclick="navigate('settings')">⚙ 设置</button>
       </div>
-    </div>
-  `;
+    </div>`;
 }
 
 // =================== Providers ===================
 async function renderProviders() {
-  content.innerHTML = '<div class="dashboard"><div class="loading">加载中...</div></div>';
+  content.innerHTML = '<div class="page"><div class="loading">加载中...</div></div>';
   const data = await api('providers');
   const providers = data.providers || [];
-  const configProviders = data.config_providers || {};
 
-  content.innerHTML = `
-    <div class="dashboard">
-      <div class="page-header">
-        <div class="page-title">Provider 管理</div>
-        <div class="page-sub">管理 AI 服务商和 API 密钥（共 ${providers.length} 个）</div>
-      </div>
+  let html = '<div class="page"><h2>🔑 Provider 管理</h2>';
 
-      <div class="card" style="margin-bottom:16px;">
-        <h3 style="margin-bottom:12px;">添加服务商</h3>
-        <form id="add-provider-form" style="display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:10px;align-items:end;">
-          <div class="form-group" style="margin:0;">
-            <label class="form-label">服务商</label>
-            <select id="new-provider-name" class="form-input" required>
-              <option value="">选择…</option>
-              <option value="openai">OpenAI</option>
-              <option value="anthropic">Anthropic (Claude)</option>
-              <option value="azure">Azure OpenAI</option>
-              <option value="google">Google Gemini</option>
-              <option value="deepseek">DeepSeek</option>
-              <option value="moonshot">Moonshot</option>
-              <option value="openrouter">OpenRouter</option>
-              <option value="custom">自定义</option>
-            </select>
-          </div>
-          <div class="form-group" style="margin:0;">
-            <label class="form-label">API 密钥</label>
-            <input type="password" id="new-provider-key" class="form-input" placeholder="sk-..." required>
-          </div>
-          <div class="form-group" style="margin:0;">
-            <label class="form-label">自定义地址（可选）</label>
-            <input type="text" id="new-provider-url" class="form-input" placeholder="https://api.example.com/v1">
-          </div>
-          <button type="submit" class="btn btn-primary">添加</button>
-        </form>
-      </div>
-
-      <div class="card" style="margin-bottom:16px;">
-        <h3 style="margin-bottom:12px;">已配置的 Provider</h3>
-        ${providers.length === 0 ? '<div style="color:var(--text-muted);padding:12px 0;">尚未添加任何 Provider</div>' : ''}
-        <table class="data-table">
-          <thead><tr>
-            <th>服务商</th>
-            <th>API Key</th>
-            <th>地址</th>
-            <th style="text-align:right">操作</th>
-          </tr></thead>
-          <tbody>
-            ${providers.map(p => `
-              <tr>
-                <td><strong>${p.provider || p.name || '-'}</strong></td>
-                <td style="color:var(--text-muted);font-family:monospace;font-size:12px;">
-                  ${(p.apiKey || '').substring(0, 12)}...
-                </td>
-                <td style="color:var(--text-muted);font-size:12px;">${p.baseURL || p.api || '-'}</td>
-                <td style="text-align:right">
-                  <button class="btn btn-danger btn-sm" onclick="removeProvider('${p.provider || p.name || ''}')">删除</button>
-                </td>
-              </tr>
-            `).join('')}
-          </tbody>
-        </table>
-      </div>
-
-      <div class="card">
-        <h3 style="margin-bottom:12px;">内置 Provider（系统配置）</h3>
-        <table class="data-table">
-          <thead><tr><th>名称</th><th>API 地址</th></tr></thead>
-          <tbody>
-            ${Object.entries(configProviders).map(([k, v]) => `
-              <tr>
-                <td><strong>${k}</strong></td>
-                <td style="color:var(--text-muted);font-size:12px;">${v.api || '-'}</td>
-              </tr>
-            `).join('')}
-          </tbody>
-        </table>
-      </div>
+  // Add form
+  html += `<div class="card">
+    <h3>添加 / 更新 Provider</h3>
+    <div class="form-row">
+      <input id="provName" class="input" placeholder="Provider 名称 (如 openai, deepseek)" style="flex:1;">
+      <input id="provKey" class="input" type="password" placeholder="API Key" style="flex:1.5;">
     </div>
-  `;
+    <div class="form-row">
+      <input id="provUrl" class="input" placeholder="Base URL (可选的)" style="flex:1;">
+    </div>
+    <button class="btn btn-primary" onclick="addProvider()">添加</button>
+    <span id="provMsg" style="margin-left:12px;font-size:13px;"></span>
+  </div>`;
 
-  // Bind add form
-  $('#add-provider-form').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const provider = $('#new-provider-name').value;
-    const apiKey = $('#new-provider-key').value;
-    const baseUrl = $('#new-provider-url').value;
-    if (!provider || !apiKey) { toast('请填写服务商和 API 密钥', 'error'); return; }
-    const btn = e.target.querySelector('button[type="submit"]');
-    btn.disabled = true;
-    btn.textContent = '添加中…';
-    const r = await api('providers/add', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({provider, api_key: apiKey, base_url: baseUrl || undefined}),
-    });
-    btn.disabled = false;
-    btn.textContent = '添加';
-    if (r.ok) {
-      toast(r.output || '添加成功');
-      renderProviders();
-    } else {
-      toast(r.error || '添加失败', 'error');
+  // List
+  html += '<div class="card"><h3>已配置 Provider</h3>';
+  if (providers.length === 0) {
+    html += '<p class="muted">暂无 Provider，请添加 API Key</p>';
+  } else {
+    html += '<table class="table"><thead><tr><th>ID</th><th>Base URL</th><th>API Key</th><th>操作</th></tr></thead><tbody>';
+    for (const p of providers) {
+      const masked = p.key ? p.key.slice(0, 8) + '...' + p.key.slice(-4) : '-';
+      html += `<tr>
+        <td><strong>${p.id}</strong></td>
+        <td class="muted">${p.url || '-'}</td>
+        <td><code>${masked}</code></td>
+        <td>
+          <button class="btn btn-sm btn-ghost" onclick="testProvider('${p.id}')">测试</button>
+          <button class="btn btn-sm btn-danger" onclick="removeProvider('${p.id}')">删除</button>
+        </td>
+      </tr>`;
     }
-  });
+    html += '</tbody></table>';
+  }
+  html += '</div></div>';
+  content.innerHTML = html;
 }
 
-async function removeProvider(name) {
-  if (!name || !confirm(`确定删除 Provider "${name}"？`)) return;
-  const r = await api('providers/remove/' + encodeURIComponent(name), { method: 'DELETE' });
-  toast(r.ok ? (r.output || '已删除') : (r.error || '删除失败'), r.ok ? 'success' : 'error');
-  if (r.ok) renderProviders();
-}
+window.addProvider = async function() {
+  const name = $('#provName').value.trim();
+  const key = $('#provKey').value.trim();
+  const url = $('#provUrl').value.trim();
+  if (!name || !key) { $('#provMsg').textContent = '名称和 API Key 必填'; return; }
+  const r = await api('providers/add', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({provider: name, api_key: key, base_url: url || undefined}),
+  });
+  $('#provMsg').textContent = r.message || r.error;
+  if (r.success) { $('#provKey').value = ''; $('#provUrl').value = ''; setTimeout(renderProviders, 1000); }
+};
+
+window.removeProvider = async function(id) {
+  if (!confirm(`确定删除 Provider: ${id}？`)) return;
+  const r = await api('providers/remove', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({provider: id}),
+  });
+  if (r.success) toast(r.message); else toast(r.error, 'error');
+  renderProviders();
+};
+
+window.testProvider = async function(id) {
+  const btn = event.target;
+  btn.disabled = true; btn.textContent = '测试中...';
+  const r = await api('providers/test/' + id);
+  btn.disabled = false;
+  if (r.success) {
+    toast(`${id}: ${r.message}`, 'success');
+    btn.textContent = '✓ 已连接';
+    setTimeout(() => btn.textContent = '测试', 3000);
+  } else {
+    toast(`${id}: ${r.error || '连接失败'}`, 'error');
+    btn.textContent = '✗ 失败';
+    setTimeout(() => btn.textContent = '测试', 3000);
+  }
+};
 
 // =================== Sessions ===================
 async function renderSessions() {
-  content.innerHTML = '<div class="dashboard"><div class="loading">加载中...</div></div>';
+  content.innerHTML = '<div class="page"><div class="loading">加载中...</div></div>';
   const data = await api('sessions');
   const sessions = data.sessions || [];
 
-  content.innerHTML = `
-    <div class="dashboard">
-      <div class="page-header">
-        <div class="page-title">历史会话</div>
-        <div class="page-sub">共 ${sessions.length} 个会话${sessions.length > 0 ? '（点击导出下载 JSON）' : ''}</div>
-      </div>
-      ${sessions.length === 0 ? '<div class="empty"><div class="empty-icon">📋</div>暂无会话记录</div>' : `
-        <table class="data-table">
-          <thead><tr>
-            <th>会话标题</th>
-            <th>项目</th>
-            <th>更新时间</th>
-            <th style="text-align:right">操作</th>
-          </tr></thead>
-          <tbody>
-            ${sessions.map(s => {
-              const d = new Date(s.updated);
-              const t = `${d.getMonth()+1}/${d.getDate()} ${d.getHours().toString().padStart(2,'0')}:${d.getMinutes().toString().padStart(2,'0')}`;
-              return `<tr>
-                <td><strong>${s.title || '无标题'}</strong></td>
-                <td style="color:var(--text-muted)">${s.projectId || '-'}</td>
-                <td style="color:var(--text-muted)">${t}</td>
-                <td style="text-align:right">
-                  <button class="btn btn-ghost btn-sm" onclick="exportSession('${s.id}')">导出</button>
-                  <button class="btn btn-danger btn-sm" onclick="deleteSession('${s.id}','${(s.title||'').replace(/'/g,"\\'")}')">删除</button>
-                </td>
-              </tr>`;
-            }).join('')}
-          </tbody>
-        </table>
-      `}
-    </div>
-  `;
+  let html = '<div class="page"><h2>📋 历史会话</h2><div class="card">';
+  if (sessions.length === 0) {
+    html += '<p class="muted">暂无会话记录</p>';
+  } else {
+    html += '<table class="table"><thead><tr><th>名称</th><th>ID</th><th>模型</th><th>创建时间</th><th>操作</th></tr></thead><tbody>';
+    for (const s of sessions) {
+      html += `<tr>
+        <td>${s.name}</td>
+        <td><code>${(s.id || '').slice(0, 12)}...</code></td>
+        <td>${s.model || '-'}</td>
+        <td class="muted">${s.created || '-'}</td>
+        <td>
+          <button class="btn btn-sm btn-ghost" onclick="exportSession('${s.id}')">导出</button>
+          <button class="btn btn-sm btn-danger" onclick="deleteSession('${s.id}')">删除</button>
+        </td>
+      </tr>`;
+    }
+    html += '</tbody></table>';
+  }
+  html += '</div></div>';
+  content.innerHTML = html;
 }
 
-async function deleteSession(id, title) {
-  if (!confirm('确定删除会话 "' + title + '"？')) return;
-  const r = await api('sessions/' + id + '/delete');
-  toast(r.ok ? '已删除' : '删除失败', r.ok ? 'success' : 'error');
-  if (r.ok) renderSessions();
-}
-
-async function exportSession(id) {
-  const data = await api('sessions/' + id + '/export');
-  if (data.ok) {
-    const content = data.output || '';
-    const isJson = (data.message || '').indexOf('JSON') === -1;
-    const blob = new Blob([content], { type: isJson ? 'application/json' : 'text/plain' });
+window.exportSession = async function(id) {
+  const r = await api('sessions/' + id + '/export');
+  if (r.success) {
+    const blob = new Blob([JSON.stringify(r.data, null, 2)], {type: 'application/json'});
+    const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = id + (isJson ? '.json' : '.txt');
-    a.click();
+    a.href = url; a.download = `session_${id.slice(0, 8)}.json`; a.click();
+    URL.revokeObjectURL(url);
     toast('导出成功');
   } else {
-    toast(data.error || '导出失败', 'error');
+    toast(r.error || '导出失败', 'error');
   }
-}
+};
+
+window.deleteSession = async function(id) {
+  if (!confirm('确定删除此会话？')) return;
+  const r = await api('sessions/delete', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({session_id: id}),
+  });
+  if (r.success) toast(r.message); else toast(r.error, 'error');
+  renderSessions();
+};
 
 // =================== Stats ===================
 async function renderStats() {
-  content.innerHTML = '<div class="dashboard"><div class="loading">加载中...</div></div>';
+  content.innerHTML = '<div class="page"><div class="loading">加载中...</div></div>';
   const data = await api('stats');
   const stats = data.stats || {};
-  const days = data.days || 30;
 
-  content.innerHTML = `
-    <div class="dashboard">
-      <div class="page-header">
-        <div class="page-title">用量统计</div>
-        <div class="page-sub">最近 ${days} 天使用情况</div>
-      </div>
-      <div class="dash-grid">
-        <div class="dash-card">
-          <h3>会话数</h3>
-          <div class="stat-highlight">${stats['Sessions'] || '0'}</div>
-        </div>
-        <div class="dash-card">
-          <h3>消息数</h3>
-          <div class="stat-highlight">${stats['Messages'] || '0'}</div>
-        </div>
-        <div class="dash-card green">
-          <h3>总费用</h3>
-          <div class="stat-highlight">${stats['Total Cost'] || '$0.00'}</div>
-        </div>
-        <div class="dash-card accent">
-          <h3>平均 Token/会话</h3>
-          <div class="stat-highlight">${stats['Avg Tokens/Session'] || '-'}</div>
-        </div>
-      </div>
-      <div class="dash-card">
-        <h3>Token 明细</h3>
-        <div class="stat-row"><span class="stat-label">输入 (Input)</span><span class="stat-value">${stats['Input'] || '-'}</span></div>
-        <div class="stat-row"><span class="stat-label">输出 (Output)</span><span class="stat-value">${stats['Output'] || '-'}</span></div>
-        <div class="stat-row"><span class="stat-label">缓存读取 (Cache Read)</span><span class="stat-value">${stats['Cache Read'] || '-'}</span></div>
-        <div class="stat-row"><span class="stat-label">缓存写入 (Cache Write)</span><span class="stat-value">${stats['Cache Write'] || '-'}</span></div>
-        <div class="stat-row"><span class="stat-label">平均费用/天</span><span class="stat-value">${stats['Avg Cost/Day'] || '-'}</span></div>
-      </div>
-      <div class="dash-card">
-        <h3>工具调用统计</h3>
-        <div id="toolStats">${data.models_raw ? '<pre style="font-size:12px;color:var(--text-secondary);white-space:pre-wrap;">' + data.models_raw + '</pre>' : '<div style="color:var(--text-muted)">无工具调用数据</div>'}</div>
-      </div>
-    </div>
-  `;
+  let html = '<div class="page"><h2>📊 用量统计</h2><div class="card">';
+  const entries = Object.entries(stats);
+  if (entries.length === 0) {
+    html += '<p class="muted">暂无统计数据，请先使用会话</p>';
+  } else {
+    html += '<table class="table"><tbody>';
+    for (const [k, v] of entries) {
+      html += `<tr><td><strong>${k}</strong></td><td>${v}</td></tr>`;
+    }
+    html += '</tbody></table>';
+  }
+  html += '</div></div>';
+  content.innerHTML = html;
 }
 
 // =================== Settings ===================
 async function renderSettings() {
-  content.innerHTML = '<div class="dashboard"><div class="loading">加载中...</div></div>';
+  content.innerHTML = '<div class="page"><div class="loading">加载中...</div></div>';
   const data = await api('config');
-  const config = data.config || {};
+  const cfg = data.config || {};
+  const mirrors = data.mirrors || {};
 
-  content.innerHTML = `
-    <div class="dashboard">
-      <div class="page-header">
-        <div class="page-title">系统设置</div>
-        <div class="page-sub">MiMo Code 配置与路径信息</div>
-      </div>
-      <div class="dash-card">
-        <h3>路径信息</h3>
-        <div style="font-size:12px;color:var(--text-secondary);margin-top:8px;">
-          <pre style="white-space:pre-wrap;font-family:monospace;">${data.paths || '-'}</pre>
-        </div>
-      </div>
-      <div class="dash-card">
-        <h3>当前配置</h3>
-        <div class="config-box">${JSON.stringify(config, null, 2)}</div>
-      </div>
-    </div>
-  `;
+  let html = '<div class="page"><h2>⚙ 设置</h2>';
+
+  // Mirror selection
+  html += '<div class="card"><h3>🌐 镜像源设置（用于检查更新和升级）</h3>';
+  html += '<div class="form-row">';
+  html += '<select id="cfgMirror" class="input" style="flex:1;">';
+  for (const [key, label] of Object.entries({
+    direct: 'github.com (直连)',
+    ghproxy: 'ghproxy.com (推荐)',
+    ghproxy2: 'mirror.ghproxy.com',
+    custom: '自定义',
+  })) {
+    html += `<option value="${key}" ${cfg.mirror === key ? 'selected' : ''}>${label}</option>`;
+  }
+  html += '</select></div>';
+  html += '<div class="form-row" id="customMirrorRow" style="' + (cfg.mirror === 'custom' ? '' : 'display:none') + '">';
+  html += '<input id="cfgCustomUrl" class="input" placeholder="自定义镜像源 URL (如 https://your-mirror.com)" value="' + (cfg.mirror_custom_url || '') + '" style="flex:1;">';
+  html += '</div>';
+  html += `<button class="btn btn-primary" onclick="saveSettings()">保存设置</button>`;
+  html += '<span id="cfgMsg" style="margin-left:12px;font-size:13px;"></span>';
+  html += '</div>';
+
+  // Dark mode toggle
+  html += '<div class="card"><h3>🎨 主题</h3>';
+  const dark = cfg.dark_mode !== false;
+  html += `<label class="toggle-label"><input type="checkbox" id="cfgDark" ${dark ? 'checked' : ''} onchange="toggleDarkMode(this.checked)"> 深色模式</label>`;
+  html += '</div>';
+
+  // App info
+  html += '<div class="card"><h3>📄 应用信息</h3>';
+  html += '<table class="table"><tbody>';
+  html += `<tr><td>应用名称</td><td>MiMo Code</td></tr>`;
+  html += `<tr><td>包装器版本</td><td>v0.5.0</td></tr>`;
+  html += `<tr><td>数据目录</td><td><code>/var/apps/mimocode</code></td></tr>`;
+  html += `<tr><td>日志文件</td><td><code>/var/apps/mimocode/var/mimo.log</code></td></tr>`;
+  html += '</tbody></table>';
+  html += '</div>';
+
+  html += '</div>';
+  content.innerHTML = html;
+
+  // Mirror change handler
+  $('#cfgMirror').addEventListener('change', function() {
+    $('#customMirrorRow').style.display = this.value === 'custom' ? '' : 'none';
+  });
 }
+
+window.saveSettings = async function() {
+  const cfg = {
+    mirror: $('#cfgMirror').value,
+    mirror_custom_url: $('#cfgCustomUrl') ? $('#cfgCustomUrl').value : '',
+    dark_mode: $('#cfgDark') ? $('#cfgDark').checked : true,
+  };
+  const r = await api('config/save', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(cfg),
+  });
+  $('#cfgMsg').textContent = r.message || r.error;
+  if (r.success) toast('设置已保存');
+};
+
+window.toggleDarkMode = function(checked) {
+  document.documentElement.style.setProperty('--bg', checked ? '#0a0a0f' : '#f5f5f7');
+  document.documentElement.style.setProperty('--bg-surface', checked ? '#12121a' : '#ffffff');
+  document.documentElement.style.setProperty('--bg-elevated', checked ? '#1a1a24' : '#f0f0f2');
+  document.documentElement.style.setProperty('--bg-hover', checked ? '#22222e' : '#e8e8ec');
+  document.documentElement.style.setProperty('--border', checked ? '#2a2a38' : '#dddde0');
+  document.documentElement.style.setProperty('--text', checked ? '#e4e4ec' : '#1a1a2e');
+  document.documentElement.style.setProperty('--text-secondary', checked ? '#8888a0' : '#666680');
+  document.documentElement.style.setProperty('--text-muted', checked ? '#555568' : '#9999a0');
+  saveSettings();
+};
 
 // =================== Upgrade ===================
 async function renderUpgrade() {
-  content.innerHTML = '<div class="dashboard"><div class="loading">加载中...</div></div>';
-  const data = await api('upgrade');
+  content.innerHTML = '<div class="page"><div class="loading">加载中...</div></div>';
+  const [statusData, cfgData] = await Promise.all([
+    api('upgrade/status'),
+    api('config'),
+  ]);
+  const cfg = cfgData.config || {};
+  const currentVer = statusData.current_version || '?';
+  const mirror = cfg.mirror || 'direct';
 
-  content.innerHTML = `
-    <div class="dashboard">
-      <div class="upgrade-card">
-        <div class="upgrade-icon">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="48" height="48" stroke-linecap="round" stroke-linejoin="round">
-            <polyline points="23 18 13 8 3 18"></polyline>
-            <line x1="21" y1="16" x2="21" y2="2"></line>
-          </svg>
-        </div>
-        <h2>升级 MiMo Code</h2>
-        <p>当前版本: <strong>${data.current_version || '未知'}</strong></p>
-        <div style="margin-top:12px;font-size:12px;color:var(--text-secondary);">
-          <p>升级将从 GitHub 下载最新版本替换二进制。</p>
-          <p style="color:var(--yellow);margin-top:6px;">⚠️ 注意：升级后二进制被替换，但下次重装 fpk 会恢复为打包版本。</p>
-        </div>
-        <button id="do-upgrade-btn" class="btn btn-primary" style="margin-top:16px;" onclick="doUpgrade()">升级到最新版</button>
-        <div id="upgrade-status" style="margin-top:12px;"></div>
-      </div>
-    </div>
-  `;
+  let html = '<div class="page"><h2>⬆ 检查更新</h2>';
+
+  html += '<div class="card"><h3>当前版本</h3>';
+  html += `<p style="font-size:24px;font-weight:700;">v${currentVer}</p>`;
+  html += `<p class="muted">包装器 v0.5.0</p>`;
+  html += '</div>';
+
+  // Mirror info
+  html += '<div class="card"><h3>🌐 镜像源</h3>';
+  html += `<p>当前使用: <strong>${mirror === 'custom' ? (cfg.mirror_custom_url || '自定义') : mirror}</strong></p>`;
+  html += `<button class="btn btn-ghost btn-sm" onclick="navigate('settings')">修改镜像源</button>`;
+  html += '</div>';
+
+  // Check update button
+  html += '<div class="card"><h3>检查更新</h3>';
+  html += `<button class="btn btn-primary" id="checkUpdateBtn" onclick="checkUpdate()">🔍 检查新版本</button>`;
+  html += '<div id="updateResult" style="margin-top:12px;"></div>';
+  html += '</div>';
+
+  // Upgrade button (hidden until new version found)
+  html += '<div id="upgradePanel" class="card" style="display:none;">';
+  html += '<h3>⬇ 升级</h3>';
+  html += '<div id="upgradeInfo"></div>';
+  html += '<button class="btn btn-primary btn-lg" id="doUpgradeBtn" onclick="doUpgrade()" style="display:none;">⬇ 立即升级</button>';
+  html += '<div id="upgradeProgress" style="margin-top:12px;"></div>';
+  html += '</div>';
+
+  html += '</div>';
+  content.innerHTML = html;
 }
 
-async function doUpgrade() {
-  const btn = $('#do-upgrade-btn');
-  const status = $('#upgrade-status');
-  btn.disabled = true;
-  btn.textContent = '升级中…';
-  status.innerHTML = '<div class="loading">正在升级，预计 2 分钟…</div>';
-  const r = await api('upgrade/do', { method: 'POST' });
-  btn.disabled = false;
-  btn.textContent = '升级到最新版';
-  if (r.ok) {
-    status.innerHTML = '<div style="color:var(--green);">升级成功！建议重启应用。</div>';
-    toast('升级成功');
-  } else {
-    status.innerHTML = '<div style="color:var(--red);">升级失败：' + (r.error || r.output || '未知错误') + '</div>';
-    toast('升级失败', 'error');
+let _latestVersionInfo = null;
+
+window.checkUpdate = async function() {
+  const btn = $('#checkUpdateBtn');
+  const result = $('#updateResult');
+  btn.disabled = true; btn.textContent = '检查中...';
+  result.innerHTML = '<span class="loading" style="display:inline-block;width:20px;height:20px;"></span> 正在查询...';
+
+  const cfg = (await api('config')).config || {};
+  const mirror = cfg.mirror || 'direct';
+  const custom = cfg.mirror_custom_url || '';
+
+  const r = await api('check-update?mirror=' + encodeURIComponent(mirror) + '&custom_url=' + encodeURIComponent(custom));
+
+  if (r.error) {
+    result.innerHTML = `<div class="alert alert-error">❌ 检查失败：${r.error}</div>`;
+    btn.disabled = false; btn.textContent = '🔍 重试';
+    return;
   }
+
+  const current = r.current_version || '0.1.0';
+  const latest = r.version || '0.1.0';
+
+  if (r.version && r.version !== current && r.version !== '0.1.0') {
+    _latestVersionInfo = r;
+    result.innerHTML = `<div class="alert alert-success">🎉 发现新版本！v${current} → <strong>v${latest}</strong></div>`;
+    $('#upgradePanel').style.display = '';
+    $('#upgradeInfo').innerHTML = `
+      <p>发布日期：${r.published || '未知'}</p>
+      <p>下载地址：<code style="font-size:11px;word-break:break-all;">${(r.download_url || '').slice(0, 100)}...</code></p>
+    `;
+    $('#doUpgradeBtn').style.display = '';
+    btn.textContent = '✓ 已检查';
+  } else {
+    result.innerHTML = `<div class="alert alert-info">✅ 已是最新版本 v${current}</div>`;
+    btn.disabled = false; btn.textContent = '🔍 再检查';
+  }
+};
+
+window.doUpgrade = async function() {
+  if (!_latestVersionInfo) return;
+  const btn = $('#doUpgradeBtn');
+  const progress = $('#upgradeProgress');
+  btn.disabled = true; btn.textContent = '正在下载升级...';
+  progress.innerHTML = '<span class="loading" style="display:inline-block;width:20px;height:20px;"></span> 下载中（约 135MB，可能需要几分钟）...';
+
+  const r = await api('upgrade/do', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      download_url: _latestVersionInfo.download_url,
+      version: _latestVersionInfo.version,
+    }),
+  });
+
+  if (r.success) {
+    progress.innerHTML = `<div class="alert alert-success">${r.message}</div>`;
+    btn.textContent = '✅ 升级完成';
+    setTimeout(() => renderUpgrade(), 2000);
+  } else {
+    progress.innerHTML = `<div class="alert alert-error">❌ 升级失败：${r.error}</div>`;
+    btn.disabled = false; btn.textContent = '重新尝试';
+  }
+};
+
+// =================== Logs ===================
+async function renderLogs() {
+  content.innerHTML = '<div class="page"><div class="loading">加载中...</div></div>';
+  const data = await api('logs?limit=100');
+  const logs = data.logs || [];
+
+  let html = '<div class="page"><h2>📋 运行日志</h2>';
+  html += '<div class="card" style="max-height:600px;overflow-y:auto;font-family:monospace;font-size:12px;line-height:1.6;">';
+  if (logs.length === 0) {
+    html += '<p class="muted">暂无日志</p>';
+  } else {
+    for (const l of logs) {
+      const cls = l.source === 'wrapper' ? 'log-wrapper' : 'log-mimo';
+      html += `<div class="${cls}">${escapeHtml(l.text)}</div>`;
+    }
+  }
+  html += '</div>';
+  html += '<div style="margin-top:8px;">';
+  html += `<button class="btn btn-ghost btn-sm" onclick="renderLogs()">🔄 刷新</button>`;
+  html += `<button class="btn btn-ghost btn-sm" onclick="clearLogs()">🗑 清空</button>`;
+  html += '</div>';
+  html += '</div>';
+  content.innerHTML = html;
 }
+
+function escapeHtml(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+window.clearLogs = function() {
+  // Log clearing is not implemented on backend, just reload
+  toast('请在设置中管理日志文件', 'info');
+};
+
+// =================== Init ===================
+// Auto-refresh status dot
+setInterval(async () => {
+  if (currentView !== 'dashboard') return;
+  const data = await api('status');
+  const dot = $('#statusDot');
+  if (dot) dot.className = 'status-dot' + (data.mimo_web ? ' running' : '');
+}, 10000);
+
+// Load dashboard on start
+renderDashboard();
