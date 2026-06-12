@@ -479,7 +479,28 @@ def _write_auth(providers):
 # ============================================================
 
 class APIHandler(http.server.SimpleHTTPRequestHandler):
-    """HTTP request handler with JSON API routing."""
+    """HTTP request handler with JSON API routing.
+    Static files are served from PUBLIC_DIR; no directory listing.
+    """
+
+    def translate_path(self, path):
+        """Map URL paths to PUBLIC_DIR files."""
+        path = path.split('?', 1)[0].split('#', 1)[0]
+        if path.startswith('/api/'):
+            return super().translate_path(path)  # won't be used (handled by do_GET)
+        relative = path.lstrip('/')
+        if not relative:
+            relative = 'index.html'
+        result = os.path.join(PUBLIC_DIR, relative)
+        # Guard against directory listing
+        if os.path.isdir(result):
+            return os.path.join(result, 'index.html')
+        return result
+
+    def list_directory(self, path):
+        """Disable directory listing — return 404."""
+        self.send_error(404, 'Not found')
+        return None
 
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
