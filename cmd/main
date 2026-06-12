@@ -1,0 +1,85 @@
+#!/bin/bash
+# MiMo Code — Desktop App lifecycle
+# start:  launch mimo web (internal 5669) + wrapper UI (5670)
+# stop:   kill both processes
+# status: check both services
+
+MIMO_BIN="/usr/local/bin/mimo"
+MIMO_PORT="5669"
+WRAPPER_PORT="5670"
+WRAPPER_SCRIPT="/var/apps/mimocode/target/server/uwrapper.py"
+PID_DIR="/var/apps/mimocode/var"
+MIMO_PID="$PID_DIR/mimo.pid"
+WRAPPER_PID="$PID_DIR/wrapper.pid"
+MIMO_LOG="$PID_DIR/mimo.log"
+WRAPPER_LOG="$PID_DIR/wrapper.log"
+LINK_TARGET="/usr/local/bin/mimo"
+APP_BIN="/var/apps/mimocode/target/bin/mimo"
+
+mkdir -p "$PID_DIR"
+
+case "$1" in
+start)
+    # Ensure symlink exists (does NOT remove on stop)
+    ln -sf "$APP_BIN" "$LINK_TARGET" 2>/dev/null || true
+
+    # --- mimo web backend ---
+    if ! kill -0 $(cat "$MIMO_PID" 2>/dev/null) 2>/dev/null; then
+        nohup "$MIMO_BIN" web --hostname 0.0.0.0 --port "$MIMO_PORT" > "$MIMO_LOG" 2>&1 &
+        echo $! > "$MIMO_PID"
+        # Wait for port (poll up to 10s)
+        for i in $(seq 1 20); do
+            ss -tlnp 2>/dev/null | grep -q ":$MIMO_PORT " && break
+            sleep 0.5
+        done
+    fi
+
+    # --- wrapper UI ---
+    if ! kill -0 $(cat "$WRAPPER_PID" 2>/dev/null) 2>/dev/null; then
+        nohup python3 "$WRAPPER_SCRIPT" "$WRAPPER_PORT" > "$WRAPPER_LOG" 2>&1 &
+        echo $! > "$WRAPPER_PID"
+        for i in $(seq 1 10); do
+            ss -tlnp 2>/dev/null | grep -q ":$WRAPPER_PORT " && break
+            sleep 0.3
+        done
+    fi
+
+    sudo -u postgres psql -d appcenter -c "UPDATE app SET status='running' WHERE app_name='mimocode';" 2>/dev/null || true
+    exit 0
+    ;;
+
+stop)
+    for f in "$WRAPPER_PID" "$MIMO_PID"; do
+        [ -f "$f" ] && kill $(cat "$f") 2>/dev/null || true
+        rm -f "$f"
+    done
+    pkill -f "uwrapper.py $WRAPPER_PORT" 2>/dev/null || true
+    pkill -f "mimo web.*--port $MIMO_PORT" 2>/dev/null || true
+    # NOTE: /usr/local/bin/mimo symlink is NOT removed on stop,
+    # so CLI usage still works when the app is disabled.
+    exit 0
+    ;;
+
+status)
+    # Check wrapper (port 5670)
+    WRAPPER_OK=false
+    kill -0 $(cat "$WRAPPER_PID" 2>/dev/null) 2>/dev/null && WRAPPER_OK=true
+    ss -tlnp 2>/dev/null | grep -q "$WRAPPER_PORT" && WRAPPER_OK=true
+    pgrep -f "uwrapper.py" >/dev/null && WRAPPER_OK=true
+
+    # Check mimo web (port 5669)
+    MIMO_OK=false
+    kill -0 $(cat "$MIMO_PID" 2>/dev/null) 2>/dev/null && MIMO_OK=true
+    ss -tlnp 2>/dev/null | grep -q ":$MIMO_PORT " && MIMO_OK=true
+    pgrep -f "mimo web.*--port $MIMO_PORT" >/dev/null && MIMO_OK=true
+
+    # Both must be OK for status=0
+    $WRAPPER_OK && $MIMO_OK && exit 0
+    exit 3
+    ;;
+
+*)
+    echo "Usage: $0 {start|stop|status}" >&2
+    exit 1
+    ;;
+esac

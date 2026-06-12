@@ -1,0 +1,13 @@
+appname               = mimocode
+version               = 0.4.3
+display_name          = MiMo Code
+desc                  = <h3>小米 AI 编程助手</h3><p>终端原生的 AI 编程代理，基于小米大模型驱动。<br/>可读写代码、执行命令、管理 Git、跨会话持久记忆。</p><p><b>使用方法：</b>在应用中心点击「打开」即可在浏览器中使用 Web 界面。<br/>也可 SSH 登录飞牛后运行 <code>mimo</code> 命令使用终端版。</p><p>开源地址：<a href="https://github.com/XiaomiMiMo/MiMo-Code" target="_blank">github.com/XiaomiMiMo/MiMo-Code</a></p>
+source                = thirdparty
+platform              = x86
+maintainer            = 小米虾
+distributor           = 小米虾
+desktop_uidir         = ui
+desktop_applaunchname = mimocode.Application
+service_port          = 5670
+os_min_version        = 0.9.27
+checksum              =

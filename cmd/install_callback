@@ -1,0 +1,34 @@
+#!/bin/bash
+# MiMo Code 安装回调：复制全部 server/ 文件
+# 注意：不启动服务！用户首次点"启用"后 fnOS 调用 cmd/main start
+# 见 M196：install_callback 启动服务太早会导致 DB sync 在记录创建前执行
+
+SRC="${TRIM_APPDEST}/server"
+DST="/var/apps/mimocode/target/server"
+
+if [ ! -f "$SRC/mimo" ]; then
+    echo "二进制未找到: $SRC/mimo" > "${TRIM_TEMP_LOGFILE}"
+    exit 1
+fi
+
+mkdir -p "$DST" /var/apps/mimocode/target/bin
+
+cp "$SRC/mimo" /var/apps/mimocode/target/bin/mimo
+chmod 755 /var/apps/mimocode/target/bin/mimo
+
+# wrapper + UI
+cp "$SRC/uwrapper.py" "$DST/uwrapper.py"
+chmod 755 "$DST/uwrapper.py"
+if [ -d "$SRC/public" ]; then
+    cp -r "$SRC/public" "$DST/public"
+fi
+
+ln -sf /var/apps/mimocode/target/bin/mimo /usr/local/bin/mimo
+
+# 复制 ui 目录到根目录（fnOS 桌面集成需要）
+if [ -d "${TRIM_APPDEST}/app/ui" ]; then
+    cp -r "${TRIM_APPDEST}/app/ui" /var/apps/mimocode/ui
+    chmod -R 755 /var/apps/mimocode/ui
+fi
+
+exit 0

@@ -1,0 +1,12 @@
+# 二进制文件（从官方下载，不在源码中）
+app/server/mimo
+
+# 构建产物
+*.fpk
+
+# 运行时数据
+var/
+
+# Python 缓存
+__pycache__/
+*.pyc

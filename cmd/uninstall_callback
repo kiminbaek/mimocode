@@ -1,0 +1,47 @@
+#!/bin/bash
+# MiMo Code 卸载回调
+# 参考 QwenPaw 本机 uninstall_callback 的配置保留模式
+
+LOG_FILE="${TRIM_PKGVAR}/uninstall.log"
+
+log_msg() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG_FILE" 2>/dev/null || true
+}
+
+log_msg "=== MiMo Code 卸载开始 ==="
+
+# 1. 清理系统级软链（stop 不会删，卸载时才删）
+if [ -L "/usr/local/bin/mimo" ]; then
+    rm -f "/usr/local/bin/mimo" 2>/dev/null || true
+    log_msg "已清理软链: /usr/local/bin/mimo"
+fi
+
+# 2. 清理二进制 + 封装服务
+if [ -f "${TRIM_APPDEST}/bin/mimo" ]; then
+    rm -f "${TRIM_APPDEST}/bin/mimo"
+fi
+rm -rf "${TRIM_APPDEST}/bin" 2>/dev/null || true
+if [ -d "${TRIM_APPDEST}/server" ]; then
+    rm -rf "${TRIM_APPDEST}/server" 2>/dev/null || true
+    log_msg "已清理封装服务: ${TRIM_APPDEST}/server"
+fi
+
+# 3. 清理运行时数据（var/ — 日志等）
+if [ -d "${TRIM_PKGVAR}" ]; then
+    rm -rf "${TRIM_PKGVAR}"/* 2>/dev/null || true
+    log_msg "已清理运行时数据: ${TRIM_PKGVAR}"
+fi
+
+# 4. 配置保留逻辑（由 wizard 用户选择）
+KEEP_CONFIG="${wizard_keep_config:-true}"
+if [ "$KEEP_CONFIG" != "true" ]; then
+    if [ -d "${TRIM_PKGETC}" ]; then
+        rm -rf "${TRIM_PKGETC}" 2>/dev/null || true
+        log_msg "已删除配置目录（含 API Key 等）: ${TRIM_PKGETC}"
+    fi
+    log_msg "MiMo Code 已完全卸载（含配置文件）"
+else
+    log_msg "MiMo Code 已卸载（保留配置文件，下次安装可复用）"
+fi
+
+exit 0
