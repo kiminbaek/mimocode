@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""MiMo Code fnOS Desktop App — Deep Integration Wrapper v0.5.0
+"""MiMo Code fnOS Desktop App — Deep Integration Wrapper v0.6.0
 Provides: Dashboard, Provider Management, Session Management, Stats, 
-Settings, Upgrade, Auto-Restart, Log Viewer, Chat
+Settings, Upgrade, Auto-Restart, Log Viewer, Chat,
+Agent Management, MCP Management, ACP Server, Debug Panel
 All API calls route to `mimo` CLI commands, parsed to JSON for the frontend.
 """
 import http.server
@@ -37,6 +38,9 @@ MIRRORS = {
 
 os.makedirs(VAR_DIR, exist_ok=True)
 START_TIME = time.time()
+
+# ACP server process (managed by wrapper)
+ACP_PROCESS = {'proc': None, 'port': 5671}
 
 
 # ============================================================
@@ -591,12 +595,27 @@ class APIHandler(http.server.SimpleHTTPRequestHandler):
                 self._json_response(self._handle_upgrade(data))
             elif path == '/api/chat':
                 self._json_response(self._handle_chat(data))
+            elif path == '/api/agents/create':
+                self._json_response(self._handle_agent_create(data))
+            elif path == '/api/mcp/add':
+                self._json_response(self._handle_mcp_add(data))
+            elif path == '/api/acp/toggle':
+                self._json_response(self._handle_acp_toggle(data))
             elif path == '/api/restart':
                 # Restart the mimo web service
                 subprocess.run(['pkill', '-f', 'mimo web'], capture_output=True, timeout=5)
                 time.sleep(1)
                 ok = _start_mimo_web()
                 self._json_response({'success': ok, 'message': '服务已重启' if ok else '重启失败'})
+            elif path == '/api/agents':
+                self._json_response(self._handle_agents())
+            elif path == '/api/mcp':
+                self._json_response(self._handle_mcp())
+            elif path == '/api/acp/status':
+                self._json_response(self._handle_acp_status())
+            elif path == '/api/debug':
+                section = params.get('section', ['all'])[0]
+                self._json_response(self._handle_debug(section))
             else:
                 self._json_response({'error': 'Not found'}, 404)
         except Exception as e:
@@ -761,6 +780,187 @@ class APIHandler(http.server.SimpleHTTPRequestHandler):
         out, rc = run_mimo(*args, timeout=120)
         return {'success': rc == 0, 'response': out, 'returncode': rc}
 
+    # ==========================================================
+    # Agent Management
+    # ==========================================================
+    def _handle_agents(self):
+        """List all agents with their permission details."""
+        out, rc = run_mimo('agent', 'list', timeout=15)
+        if rc != 0:
+            return {'error': out, 'agents': []}
+
+        agents = []
+        current = None
+        json_lines = []
+        in_json = False
+
+        for line in out.split('\n'):
+            stripped = line.strip()
+            if not stripped:
+                continue
+            # Agent header line like "build (primary)" or with indentation
+            if '(' in stripped and stripped.endswith(')') and not stripped.startswith('['):
+                if current:
+                    # Try to parse accumulated JSON
+                    if json_lines:
+                        try:
+                            current['permissions'] = json.loads(''.join(json_lines))
+                        except:
+                            current['raw_permissions'] = ''.join(json_lines)
+                        json_lines = []
+                    agents.append(current)
+                    in_json = False
+                name_part = stripped[:stripped.index('(')].strip()
+                type_part = stripped[stripped.index('(')+1:stripped.index(')')]
+                current = {'name': name_part, 'type': type_part, 'permissions': []}
+                in_json = False
+            elif stripped.startswith('[') or stripped.startswith('{'):
+                in_json = True
+                json_lines.append(stripped)
+            elif in_json:
+                json_lines.append(stripped)
+
+        # Don't forget the last agent
+        if current:
+            if json_lines:
+                try:
+                    current['permissions'] = json.loads(''.join(json_lines))
+                except:
+                    current['raw_permissions'] = ''.join(json_lines)
+            agents.append(current)
+
+        return {'agents': agents, 'count': len(agents)}
+
+    def _handle_agent_create(self, data):
+        """Create a new agent."""
+        args = ['agent', 'create']
+        path_val = data.get('name', '').strip()
+        if path_val:
+            args.extend(['--path', path_val])
+        desc = data.get('description', '').strip()
+        if desc:
+            args.extend(['--description', desc])
+        mode = data.get('mode', '').strip()
+        if mode in ('all', 'primary', 'subagent'):
+            args.extend(['--mode', mode])
+        tools = data.get('tools', '').strip()
+        if tools:
+            args.extend(['--tools', tools])
+        model = data.get('model', '').strip()
+        if model:
+            args.extend(['-m', model])
+        out, rc = run_mimo(*args, timeout=60)
+        return {'output': out, 'success': rc == 0}
+
+    # ==========================================================
+    # MCP Management
+    # ==========================================================
+    def _handle_mcp(self):
+        """List MCP servers."""
+        out, rc = run_mimo('mcp', 'ls', timeout=15)
+        # Parse box-style output for named entries
+        servers = []
+        for line in out.split('\n'):
+            stripped = line.strip()
+            if '│' in stripped:
+                parts = [p.strip() for p in stripped.split('│')[1:-1]]
+                for p in parts:
+                    if p and p != 'MCP Servers' and not p.startswith('MCP') and not p.startswith('No') and not p.startswith('Add'):
+                        if p.startswith('•') or p.startswith('-'):
+                            servers.append({'name': p.lstrip('•-').strip()})
+        return {'servers': servers, 'count': len(servers), 'raw': out}
+
+    def _handle_mcp_add(self, data):
+        """Add an MCP server."""
+        url = data.get('url', '').strip()
+        name = data.get('name', '').strip()
+        args = ['mcp', 'add', name]
+        if url:
+            args.extend(['--url', url])
+        out, rc = run_mimo(*args, timeout=30)
+        return {'output': out, 'success': rc == 0}
+
+    # ==========================================================
+    # ACP Server
+    # ==========================================================
+    def _handle_acp_status(self):
+        """Get ACP server process status."""
+        global ACP_PROCESS
+        proc = ACP_PROCESS.get('proc')
+        running = proc is not None and proc.poll() is None
+        if not running:
+            ACP_PROCESS['proc'] = None
+        return {
+            'running': running,
+            'pid': proc.pid if (running and proc) else None,
+            'port': ACP_PROCESS.get('port', 5671),
+        }
+
+    def _handle_acp_toggle(self, data):
+        """Start or stop the ACP server."""
+        global ACP_PROCESS
+        action = data.get('action', 'start')
+        acp_port = data.get('port', 5671)
+
+        if action == 'start':
+            proc = ACP_PROCESS.get('proc')
+            if proc is not None and proc.poll() is None:
+                return {'running': True, 'pid': proc.pid, 'port': ACP_PROCESS.get('port'), 'message': 'ACP 已经在运行'}
+            try:
+                acp_log = open(os.path.join(VAR_DIR, 'acp.log'), 'a')
+                proc = subprocess.Popen(
+                    [MIMO_BIN, 'acp', '--port', str(acp_port), '--hostname', '0.0.0.0'],
+                    stdout=acp_log, stderr=subprocess.STDOUT,
+                    stdin=subprocess.DEVNULL
+                )
+                ACP_PROCESS['proc'] = proc
+                ACP_PROCESS['port'] = acp_port
+                log(f'ACP server started on port {acp_port} (PID {proc.pid})')
+                return {'running': True, 'pid': proc.pid, 'port': acp_port, 'message': 'ACP 已启动'}
+            except Exception as e:
+                return {'running': False, 'error': str(e)}
+        else:
+            proc = ACP_PROCESS.get('proc')
+            if proc and proc.poll() is None:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait(timeout=3)
+                log('ACP server stopped')
+            ACP_PROCESS['proc'] = None
+            return {'running': False, 'message': 'ACP 已停止'}
+
+    # ==========================================================
+    # Debug Panel
+    # ==========================================================
+    def _handle_debug(self, section='all'):
+        """Gather debug information."""
+        result = {}
+
+        if section in ('all', 'config'):
+            out, rc = run_mimo('debug', 'config', timeout=10)
+            result['config'] = out[:3000]
+        if section in ('all', 'paths'):
+            out, rc = run_mimo('debug', 'paths', timeout=10)
+            result['paths'] = out[:3000]
+        if section in ('all', 'skills'):
+            out, rc = run_mimo('debug', 'skill', timeout=15)
+            result['skills'] = out[:5000]
+        if section in ('all', 'scrap'):
+            out, rc = run_mimo('debug', 'scrap', timeout=10)
+            result['scrap'] = out[:3000]
+        if section in ('all', 'agent'):
+            out, rc = run_mimo('debug', 'agent', 'primary', timeout=10)
+            result['agent_primary'] = out[:3000]
+            result['wrapper_version'] = '0.6.0'
+            result['listening_port'] = LISTEN_PORT
+            result['var_dir'] = VAR_DIR
+            result['uptime'] = int(time.time() - START_TIME)
+
+        return result
+
     def _json_response(self, data, status=200):
         body = json.dumps(data, ensure_ascii=False, default=str).encode('utf-8')
         self.send_response(status)
@@ -780,7 +980,7 @@ class APIHandler(http.server.SimpleHTTPRequestHandler):
 # ============================================================
 
 if __name__ == '__main__':
-    log(f'Deep Integration Wrapper v0.5.0 starting on 0.0.0.0:{LISTEN_PORT}')
+    log(f'Deep Integration Wrapper v0.6.0 starting on 0.0.0.0:{LISTEN_PORT}')
     sync_db_status()
 
     # Start heartbeat monitor thread (auto-restart)

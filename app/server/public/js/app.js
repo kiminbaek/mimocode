@@ -1,4 +1,4 @@
-/* MiMo Code Deep Integration v0.5.0 — Enhanced Frontend SPA */
+/* MiMo Code Deep Integration v0.6.0 — Enhanced Frontend SPA */
 const $ = s => document.querySelector(s);
 const $$ = s => document.querySelectorAll(s);
 const host = location.hostname;
@@ -44,6 +44,10 @@ function navigate(view) {
     settings: renderSettings,
     upgrade: renderUpgrade,
     logs: renderLogs,
+    agents: renderAgents,
+    mcp: renderMcp,
+    acp: renderAcp,
+    debug: renderDebug,
   };
   if (view === 'chat') {
     content.innerHTML = '';
@@ -486,6 +490,254 @@ window.clearLogs = function() {
   // Log clearing is not implemented on backend, just reload
   toast('请在设置中管理日志文件', 'info');
 };
+
+// =================== Agent Management ===================
+async function renderAgents() {
+  content.innerHTML = '<div class="page"><div class="loading">加载Agent列表...</div></div>';
+  const data = await api('agents');
+  if (data.error) {
+    content.innerHTML = '<div class="page"><div class="panel warn">加载失败: ' + data.error + '</div></div>';
+    return;
+  }
+  const ag = data.agents || [];
+  let cards = '';
+  for (const a of ag) {
+    const perms = a.permissions || [];
+    let permHtml = '';
+    for (const p of perms) {
+      const cls = p.action === 'allow' ? 'tag-green' : 'tag-yellow';
+      permHtml += `<div class="tag ${cls}">${p.permission || p.pattern || '?'} → ${p.action}</div>`;
+    }
+    cards += `
+      <div class="panel">
+        <div class="panel-h"><strong>${a.name}</strong> <span class="tag tag-blue">${a.type}</span></div>
+        <div class="panel-b" style="margin-top:8px">
+          ${permHtml || '<span class="muted">无权限条目</span>'}
+        </div>
+      </div>`;
+  }
+
+  content.innerHTML = `
+    <div class="page">
+      <h2>🤖 Agent 管理</h2>
+      <p class="desc">管理 MiMo Code 的 AI Agent（角色与权限）</p>
+      <div class="dash-grid" style="grid-template-columns:1fr 1fr">
+        <div class="dash-card accent">
+          <h3>Agent 数量</h3>
+          <div class="value">${ag.length}</div>
+        </div>
+      </div>
+      <div class="section-title">Agent 列表</div>
+      ${cards || '<div class="panel muted">暂无 Agent</div>'}
+      <div class="section-title">创建新 Agent</div>
+      <div class="panel">
+        <div class="form-row">
+          <input id="agentName" placeholder="Agent 名称 (如 my-assistant)" class="inp" />
+          <input id="agentDesc" placeholder="描述 (如 编程助手)" class="inp" />
+        </div>
+        <div class="form-row">
+          <select id="agentMode" class="inp" style="flex:1">
+            <option value="subagent">子 Agent (subagent)</option>
+            <option value="primary">主要 Agent (primary)</option>
+            <option value="all">全部 (all)</option>
+          </select>
+          <input id="agentTools" placeholder="工具 (如 bash,read,write 留空=全部)" class="inp" style="flex:2" />
+        </div>
+        <div class="form-row">
+          <input id="agentModel" placeholder="模型 (如 openai/gpt-4o, 留空=默认)" class="inp" style="flex:3" />
+          <button class="btn" onclick="createAgent()">创建 Agent</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+async function createAgent() {
+  const name = $('#agentName').value.trim();
+  const desc = $('#agentDesc').value.trim();
+  const mode = $('#agentMode').value;
+  const tools = $('#agentTools').value.trim();
+  const model = $('#agentModel').value.trim();
+  if (!name) { toast('请输入 Agent 名称', 'warn'); return; }
+  const btn = content.querySelector('.btn');
+  btn.disabled = true; btn.textContent = '创建中...';
+  const r = await api('agents/create', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({name, description: desc, mode, tools, model}),
+  });
+  btn.disabled = false; btn.textContent = '创建 Agent';
+  if (r.success) {
+    toast('Agent 创建成功！');
+    renderAgents();
+  } else {
+    toast('创建失败: ' + (r.output || r.error || '未知错误'), 'error');
+  }
+}
+
+// =================== MCP Management ===================
+async function renderMcp() {
+  content.innerHTML = '<div class="page"><div class="loading">加载 MCP 服务器列表...</div></div>';
+  const data = await api('mcp');
+  if (data.error) {
+    content.innerHTML = '<div class="page"><div class="panel warn">加载失败: ' + data.error + '</div></div>';
+    return;
+  }
+  const servers = data.servers || [];
+  let listHtml = servers.map(s =>
+    `<div class="tag tag-blue" style="padding:6px 12px">${s.name}</div>`
+  ).join(' ') || '<span class="muted">暂无 MCP 服务器</span>';
+
+  content.innerHTML = `
+    <div class="page">
+      <h2>🔌 MCP 服务器管理</h2>
+      <p class="desc">Model Context Protocol — 外部工具/数据集成</p>
+      <div class="dash-grid" style="grid-template-columns:1fr 1fr">
+        <div class="dash-card accent">
+          <h3>已配置</h3>
+          <div class="value">${servers.length}</div>
+        </div>
+      </div>
+      <div class="section-title">已添加的 MCP 服务器</div>
+      <div class="panel" style="display:flex;flex-wrap:wrap;gap:8px">${listHtml}</div>
+      <div class="section-title">添加 MCP 服务器</div>
+      <div class="panel">
+        <div class="form-row">
+          <input id="mcpName" placeholder="名称 (如 filesystem-server)" class="inp" />
+          <input id="mcpUrl" placeholder="URL/命令 (如 npx @modelcontextprotocol/server-filesystem /path)" class="inp" style="flex:2" />
+          <button class="btn" onclick="addMcp()">添加</button>
+        </div>
+      </div>
+      <details style="margin-top:8px">
+        <summary class="muted" style="cursor:pointer">原始输出</summary>
+        <pre class="code-block">${escHtml(data.raw || '')}</pre>
+      </details>
+    </div>`;
+}
+
+async function addMcp() {
+  const name = $('#mcpName').value.trim();
+  const url = $('#mcpUrl').value.trim();
+  if (!name) { toast('请输入名称', 'warn'); return; }
+  const btn = content.querySelector('.btn');
+  btn.disabled = true; btn.textContent = '添加中...';
+  const r = await api('mcp/add', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({name, url}),
+  });
+  btn.disabled = false; btn.textContent = '添加';
+  if (r.success) {
+    toast('MCP 服务器已添加');
+    renderMcp();
+  } else {
+    toast('添加失败: ' + (r.output || r.error || '未知错误'), 'error');
+  }
+}
+
+// =================== ACP Server ===================
+async function renderAcp() {
+  content.innerHTML = '<div class="page"><div class="loading">加载 ACP 状态...</div></div>';
+  const status = await api('acp/status');
+  const running = status.running;
+  content.innerHTML = `
+    <div class="page">
+      <h2>🌐 ACP 服务</h2>
+      <p class="desc">Agent Client Protocol — 让外部程序通过 API 连接 MiMo Code</p>
+      <div class="dash-grid" style="grid-template-columns:1fr 1fr 1fr">
+        <div class="dash-card ${running ? 'green' : 'red'}">
+          <h3>服务状态</h3>
+          <div class="value">${running ? '运行中' : '已停止'}</div>
+          <div class="sub">PID: ${status.pid || '-'}</div>
+        </div>
+        <div class="dash-card accent">
+          <h3>端口</h3>
+          <div class="value">${status.port || 5671}</div>
+        </div>
+        <div class="dash-card">
+          <h3>操作</h3>
+          <div style="display:flex;gap:8px;margin-top:8px">
+            ${running
+              ? `<button class="btn btn-danger" onclick="toggleAcp('stop')">停止 ACP</button>`
+              : `<button class="btn" onclick="toggleAcp('start')">启动 ACP</button>`
+            }
+          </div>
+        </div>
+      </div>
+      <div class="panel muted" style="margin-top:8px">
+        启动后，外部程序可通过 <code>http://${host}:${status.port || 5671}</code> 连接 ACP 服务
+      </div>
+    </div>`;
+}
+
+async function toggleAcp(action) {
+  const btn = content.querySelector('.btn, .btn-danger');
+  if (btn) btn.disabled = true;
+  const r = await api('acp/toggle', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({action}),
+  });
+  if (!r.error) {
+    toast(r.message || (action === 'start' ? 'ACP 已启动' : 'ACP 已停止'));
+  } else {
+    toast('操作失败: ' + r.error, 'error');
+  }
+  renderAcp();
+}
+
+// =================== Debug Panel ===================
+async function renderDebug() {
+  content.innerHTML = '<div class="page"><div class="loading">收集诊断信息...</div></div>';
+  const data = await api('debug');
+  if (data.error) {
+    content.innerHTML = '<div class="page"><div class="panel warn">加载失败: ' + data.error + '</div></div>';
+    return;
+  }
+  content.innerHTML = `
+    <div class="page">
+      <h2>🔍 诊断面板</h2>
+      <p class="desc">MiMo Code 运行环境与配置诊断</p>
+      <div class="dash-grid" style="grid-template-columns:1fr 1fr">
+        <div class="dash-card accent">
+          <h3>Wrapper 版本</h3>
+          <div class="value">${data.wrapper_version || '?'}</div>
+          <div class="sub">监听端口 ${data.listening_port || '-'}</div>
+        </div>
+        <div class="dash-card">
+          <h3>运行时间</h3>
+          <div class="value">${fmtUptime(data.uptime || 0)}</div>
+          <div class="sub">${data.var_dir || '-'}</div>
+        </div>
+      </div>
+      ${renderDebugSection('⚙️ 运行配置 (config)', data.config)}
+      ${renderDebugSection('📁 全局路径 (paths)', data.paths)}
+      ${renderDebugSection('🧠 Agent 详情', data.agent_primary)}
+      ${renderDebugSection('🛠️ 可用技能 (skills)', data.skills)}
+      ${renderDebugSection('📂 已知项目 (scrap)', data.scrap)}
+    </div>`;
+}
+
+function renderDebugSection(title, contentText) {
+  if (!contentText) return '';
+  return `
+    <details class="debug-section">
+      <summary><strong>${title}</strong></summary>
+      <pre class="code-block">${escHtml(contentText)}</pre>
+    </details>`;
+}
+
+function fmtUptime(secs) {
+  if (!secs) return '-';
+  const h = Math.floor(secs / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  const s = secs % 60;
+  if (h > 0) return h + 'h ' + m + 'm';
+  if (m > 0) return m + 'm ' + s + 's';
+  return s + 's';
+}
+
+function escHtml(s) {
+  if (!s) return '';
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
 
 // =================== Init ===================
 // Auto-refresh status dot
