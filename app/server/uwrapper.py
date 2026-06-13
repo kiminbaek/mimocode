@@ -235,12 +235,9 @@ def get_recent_logs(limit=50):
 # ============================================================
 
 def check_latest_version(mirror_key='direct', custom_url=''):
-    """Check GitHub for latest mimo release version."""
-    base_url = MIRRORS.get(mirror_key, 'direct')
-    if mirror_key == 'custom' and custom_url:
-        base_url = custom_url.rstrip('/')
-    
-    api_url = f'{base_url}/XiaomiMiMo/MiMo-Code/releases/latest'
+    """Check GitHub for latest mimo release version.
+    Note: Always uses direct GitHub API regardless of mirror (API not proxied)."""
+    api_url = 'https://api.github.com/repos/XiaomiMiMo/MiMo-Code/releases/latest'
     
     try:
         r = subprocess.run(
@@ -566,6 +563,15 @@ class APIHandler(http.server.SimpleHTTPRequestHandler):
             elif path.startswith('/api/providers/test/'):
                 provider_id = path.split('/')[4]
                 self._json_response(self._handle_test_provider(provider_id))
+            elif path == '/api/agents':
+                self._json_response(self._handle_agents())
+            elif path == '/api/mcp':
+                self._json_response(self._handle_mcp())
+            elif path == '/api/acp/status':
+                self._json_response(self._handle_acp_status())
+            elif path == '/api/debug':
+                section = params.get('section', ['all'])[0]
+                self._json_response(self._handle_debug(section))
             else:
                 # Static files
                 super().do_GET()
@@ -607,15 +613,6 @@ class APIHandler(http.server.SimpleHTTPRequestHandler):
                 time.sleep(1)
                 ok = _start_mimo_web()
                 self._json_response({'success': ok, 'message': '服务已重启' if ok else '重启失败'})
-            elif path == '/api/agents':
-                self._json_response(self._handle_agents())
-            elif path == '/api/mcp':
-                self._json_response(self._handle_mcp())
-            elif path == '/api/acp/status':
-                self._json_response(self._handle_acp_status())
-            elif path == '/api/debug':
-                section = params.get('section', ['all'])[0]
-                self._json_response(self._handle_debug(section))
             else:
                 self._json_response({'error': 'Not found'}, 404)
         except Exception as e:
