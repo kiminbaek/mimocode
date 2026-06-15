@@ -2,130 +2,47 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>MiMo Code</title>
 <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
-<div class="app">
-  <div class="sidebar">
-    <div class="sidebar-logo">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <polyline points="16 18 22 12 16 6"></polyline>
-        <polyline points="8 6 2 12 8 18"></polyline>
-      </svg>
+<div id="app" class="app-shell">
+  <section id="authView" class="auth-view hidden">
+    <div class="auth-card">
+      <div class="brand-mark">Mi</div>
+      <h1>MiMo Code</h1>
+      <p id="authHint">正在检查状态...</p>
+      <input id="passwordInput" class="input" type="password" autocomplete="current-password" placeholder="管理密码">
+      <button id="authBtn" class="btn primary">继续</button>
+      <button id="clearTokenBtn" class="btn ghost">清除本机登录缓存</button>
+      <div id="authMsg" class="msg"></div>
     </div>
-    <div class="sidebar-nav">
-      <div class="nav-item active" data-view="dashboard" title="仪表盘">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <rect x="3" y="3" width="7" height="7"></rect>
-          <rect x="14" y="3" width="7" height="7"></rect>
-          <rect x="14" y="14" width="7" height="7"></rect>
-          <rect x="3" y="14" width="7" height="7"></rect>
-        </svg>
-        <span class="nav-label">仪表盘</span>
-      </div>
-      <div class="nav-item" data-view="chat" title="会话">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
-        </svg>
-        <span class="nav-label">会话</span>
-      </div>
-      <div class="nav-item" data-view="sessions" title="历史会话">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <circle cx="12" cy="12" r="10"></circle>
-          <polyline points="12 6 12 12 16 14"></polyline>
-        </svg>
-        <span class="nav-label">历史</span>
-      </div>
-      <div class="nav-item" data-view="providers" title="Provider 管理">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M12 2L2 7l10 5 10-5-10-5z"></path>
-          <path d="M2 17l10 5 10-5"></path>
-          <path d="M2 12l10 5 10-5"></path>
-        </svg>
-        <span class="nav-label">Provider</span>
-      </div>
-      <div class="nav-item" data-view="stats" title="用量统计">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <line x1="18" y1="20" x2="18" y2="10"></line>
-          <line x1="12" y1="20" x2="12" y2="4"></line>
-          <line x1="6" y1="20" x2="6" y2="14"></line>
-        </svg>
-        <span class="nav-label">统计</span>
-      </div>
-      <div class="nav-item" data-view="agents" title="Agent 管理">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
-          <circle cx="9" cy="7" r="4"></circle>
-          <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
-          <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
-        </svg>
-        <span class="nav-label">Agent</span>
-      </div>
-      <div class="nav-item" data-view="mcp" title="MCP 服务器">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <circle cx="5" cy="12" r="2"></circle>
-          <circle cx="19" cy="5" r="2"></circle>
-          <circle cx="19" cy="19" r="2"></circle>
-          <polyline points="7 11 17 7"></polyline>
-          <polyline points="7 13 17 17"></polyline>
-        </svg>
-        <span class="nav-label">MCP</span>
-      </div>
-      <div class="nav-item" data-view="logs" title="运行日志">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-          <polyline points="14 2 14 8 20 8"></polyline>
-          <line x1="16" y1="13" x2="8" y2="13"></line>
-          <line x1="16" y1="17" x2="8" y2="17"></line>
-        </svg>
-        <span class="nav-label">日志</span>
-      </div>
-      <div class="nav-item" data-view="acp" title="ACP 服务">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <polyline points="16 18 22 12 16 6"></polyline>
-          <polyline points="8 6 2 12 8 18"></polyline>
-        </svg>
-        <span class="nav-label">ACP</span>
-      </div>
-      <div class="nav-item" data-view="debug" title="诊断">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <circle cx="12" cy="12" r="10"></circle>
-          <path d="M12 16v-4"></path>
-          <path d="M12 8h.01"></path>
-        </svg>
-        <span class="nav-label">诊断</span>
-      </div>
-      <div class="nav-item" data-view="settings" title="设置">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <circle cx="12" cy="12" r="3"></circle>
-          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
-        </svg>
-        <span class="nav-label">设置</span>
-      </div>
-    </div>
-    <div class="sidebar-footer">
-      <div class="status-dot" id="statusDot"></div>
-      <div class="nav-item" data-view="upgrade" title="升级">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <polyline points="17 1 21 5 17 9"></polyline>
-          <path d="M3 11V9a4 4 0 0 1 4-4h14"></path>
-          <polyline points="7 23 3 19 7 15"></polyline>
-          <path d="M21 13v2a4 4 0 0 1-4 4H3"></path>
-        </svg>
-        <span class="nav-label">升级</span>
-      </div>
-    </div>
-  </div>
+  </section>
 
-  <div class="main">
-    <div class="content" id="content">
-      <div class="loading">加载中...</div>
-    </div>
-  </div>
+  <section id="mainView" class="main-view hidden">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark small">Mi</div>
+        <div>
+          <div class="brand-title">MiMo Code</div>
+          <div id="statusLine" class="brand-sub">加载中...</div>
+        </div>
+      </div>
+      <nav class="top-actions">
+        <button class="tab active" data-view="workspace">工作台</button>
+        <button class="tab" data-view="official">官方会话</button>
+        <button class="tab" data-view="providers">模型与服务商</button>
+        <button class="tab" data-view="sessions">会话历史</button>
+        <button class="tab" data-view="logs">日志与建议</button>
+        <button class="tab" data-view="advanced">高级设置</button>
+        <button class="tab hidden" data-view="toolbox">工具箱</button>
+        <button id="logoutBtn" class="btn ghost compact">退出</button>
+      </nav>
+    </header>
+    <main id="content" class="content"></main>
+  </section>
 </div>
-
 <script src="/js/app.js"></script>
 </body>
 </html>

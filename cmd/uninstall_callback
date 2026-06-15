@@ -1,61 +1,46 @@
 #!/bin/bash
-# MiMo Code 卸载回调
-# 参考 QwenPaw 本机 uninstall_callback 的配置保留模式
+# MiMo Code uninstall callback v0.8.0
 
 LOG_FILE="${TRIM_PKGVAR}/uninstall.log"
+mkdir -p "${TRIM_PKGVAR}" 2>/dev/null || true
 
 log_msg() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG_FILE" 2>/dev/null || true
 }
 
-log_msg "=== MiMo Code 卸载开始 ==="
+log_msg "=== MiMo Code uninstall start ==="
 
-# 0. 杀死运行中的进程（防止卸载后进程残留）
-for pid_file in "${TRIM_PKGVAR}/wrapper.pid" "${TRIM_PKGVAR}/mimo.pid" "${TRIM_PKGVAR}/wrapper.pid" "${TRIM_PKGVAR}/mimo.pid"; do
+for pid_file in "${TRIM_PKGVAR}/wrapper.pid" "${TRIM_PKGVAR}/mimo.pid"; do
     if [ -f "$pid_file" ]; then
         pid=$(cat "$pid_file" 2>/dev/null || true)
         [ -n "$pid" ] && kill "$pid" 2>/dev/null || true
+        sleep 0.3
+        [ -n "$pid" ] && kill -9 "$pid" 2>/dev/null || true
         rm -f "$pid_file"
     fi
 done
-pkill -f "uwrapper.py" 2>/dev/null || true
-pkill -f "mimo web" 2>/dev/null || true
-pkill -f "mimo serve" 2>/dev/null || true
-sleep 1
-log_msg "已清理运行中的进程"
+pkill -f "uwrapper.py 5670" 2>/dev/null || true
+pkill -f "mimo web.*--port 5669" 2>/dev/null || true
+log_msg "processes stopped"
 
-# 1. 清理系统级软链（stop 不会删，卸载时才删）
 if [ -L "/usr/local/bin/mimo" ]; then
     rm -f "/usr/local/bin/mimo" 2>/dev/null || true
-    log_msg "已清理软链: /usr/local/bin/mimo"
+    log_msg "symlink removed: /usr/local/bin/mimo"
 fi
 
-# 2. 清理二进制 + 封装服务
-if [ -f "${TRIM_APPDEST}/bin/mimo" ]; then
-    rm -f "${TRIM_APPDEST}/bin/mimo"
-fi
-rm -rf "${TRIM_APPDEST}/bin" 2>/dev/null || true
-if [ -d "${TRIM_APPDEST}/server" ]; then
-    rm -rf "${TRIM_APPDEST}/server" 2>/dev/null || true
-    log_msg "已清理封装服务: ${TRIM_APPDEST}/server"
-fi
+rm -rf "${TRIM_APPDEST}/bin" "${TRIM_APPDEST}/server" 2>/dev/null || true
+log_msg "target binary/server removed"
 
-# 3. 清理运行时数据（var/ — 日志等）
-if [ -d "${TRIM_PKGVAR}" ]; then
-    rm -rf "${TRIM_PKGVAR}"/* 2>/dev/null || true
-    log_msg "已清理运行时数据: ${TRIM_PKGVAR}"
-fi
+rm -rf "${TRIM_PKGVAR}"/* 2>/dev/null || true
+log_msg "runtime var cleaned"
 
-# 4. 配置保留逻辑（由 wizard 用户选择）
 KEEP_CONFIG="${wizard_keep_config:-true}"
 if [ "$KEEP_CONFIG" != "true" ]; then
-    if [ -d "${TRIM_PKGETC}" ]; then
-        rm -rf "${TRIM_PKGETC}" 2>/dev/null || true
-        log_msg "已删除配置目录（含 API Key 等）: ${TRIM_PKGETC}"
-    fi
-    log_msg "MiMo Code 已完全卸载（含配置文件）"
+    rm -rf "${TRIM_PKGETC}" 2>/dev/null || true
+    rm -rf "/root/.local/share/mimocode" 2>/dev/null || true
+    log_msg "config removed"
 else
-    log_msg "MiMo Code 已卸载（保留配置文件，下次安装可复用）"
+    log_msg "config kept: ${TRIM_PKGETC}"
 fi
 
 exit 0

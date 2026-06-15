@@ -1,34 +1,62 @@
 #!/bin/bash
-# MiMo Code 安装回调：复制全部 server/ 文件
-# 注意：不启动服务！用户首次点"启用"后 fnOS 调用 cmd/main start
-# 见 M196：install_callback 启动服务太早会导致 DB sync 在记录创建前执行
+# MiMo Code install callback v0.10.3
+# Prepare CLI symlink, permissions and UI root. Do not start service here.
 
 SRC="${TRIM_APPDEST}/server"
-DST="/var/apps/mimocode/target/server"
+DST_SERVER="/var/apps/mimocode/target/server"
+DST_BIN="/var/apps/mimocode/target/bin"
+LOG="${TRIM_TEMP_LOGFILE:-/var/apps/mimocode/var/install.log}"
+
+mkdir -p "$DST_SERVER" "$DST_BIN" /var/apps/mimocode/var /var/apps/mimocode/etc
+
+SRC_REAL=$(readlink -f "$SRC" 2>/dev/null || echo "$SRC")
+DST_REAL=$(readlink -f "$DST_SERVER" 2>/dev/null || echo "$DST_SERVER")
 
 if [ ! -f "$SRC/mimo" ]; then
-    echo "二进制未找到: $SRC/mimo" > "${TRIM_TEMP_LOGFILE}"
+    echo "mimo binary missing: $SRC/mimo" > "$LOG"
     exit 1
 fi
 
-mkdir -p "$DST" /var/apps/mimocode/target/bin
-
-cp "$SRC/mimo" /var/apps/mimocode/target/bin/mimo
-chmod 755 /var/apps/mimocode/target/bin/mimo
-
-# wrapper + UI
-cp "$SRC/uwrapper.py" "$DST/uwrapper.py"
-chmod 755 "$DST/uwrapper.py"
-if [ -d "$SRC/public" ]; then
-    cp -r "$SRC/public" "$DST/public"
+if [ "$SRC_REAL" != "$DST_REAL" ]; then
+    cp "$SRC/mimo" "$DST_SERVER/mimo"
+    cp "$SRC/uwrapper.py" "$DST_SERVER/uwrapper.py"
+    rm -rf "$DST_SERVER/public"
+    if [ -d "$SRC/public" ]; then
+        cp -r "$SRC/public" "$DST_SERVER/public"
+    else
+        echo "server public missing: $SRC/public" >> "$LOG"
+    fi
+else
+    # fnOS already extracted server assets into /var/apps/mimocode/target/server.
+    # Never cp a file onto itself here; cp returns non-zero and can poison install logs.
+    :
 fi
 
-ln -sf /var/apps/mimocode/target/bin/mimo /usr/local/bin/mimo
+chmod 755 "$DST_SERVER/mimo" "$DST_SERVER/uwrapper.py"
+if [ -d "$DST_SERVER/public" ]; then
+    chmod -R 755 "$DST_SERVER/public"
+else
+    echo "server public missing after install: $DST_SERVER/public" >> "$LOG"
+fi
 
-# 复制 ui 目录到根目录（fnOS 桌面集成需要）
-if [ -d "${TRIM_APPDEST}/app/ui" ]; then
-    cp -r "${TRIM_APPDEST}/app/ui" /var/apps/mimocode/ui
+ln -sf "$DST_SERVER/mimo" "$DST_BIN/mimo"
+ln -sf "$DST_SERVER/mimo" /usr/local/bin/mimo
+
+# fnpack extracts app/ui to ${TRIM_APPDEST}/ui inside the install runtime.
+# Historical packages may still expose ${TRIM_APPDEST}/app/ui, so keep fallback.
+UI_SRC=""
+if [ -d "${TRIM_APPDEST}/ui" ]; then
+    UI_SRC="${TRIM_APPDEST}/ui"
+elif [ -d "${TRIM_APPDEST}/app/ui" ]; then
+    UI_SRC="${TRIM_APPDEST}/app/ui"
+fi
+
+if [ -n "$UI_SRC" ]; then
+    rm -rf /var/apps/mimocode/ui
+    cp -r "$UI_SRC" /var/apps/mimocode/ui
     chmod -R 755 /var/apps/mimocode/ui
+else
+    echo "ui directory missing under ${TRIM_APPDEST}" >> "$LOG"
 fi
 
 exit 0

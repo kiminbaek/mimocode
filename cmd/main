@@ -1,83 +1,99 @@
 #!/bin/bash
-# MiMo Code — Desktop App lifecycle
-# start:  launch mimo web (internal 5669) + wrapper UI (5670)
-# stop:   kill both processes
-# status: check both services
+# MiMo Code lifecycle v0.8.0
+# start: wrapper UI (5670) + wrapper-managed mimo web (5669)
+# stop: stop wrapper and mimo web
+# status: wrapper port and process health
 
-MIMO_BIN="/usr/local/bin/mimo"
-MIMO_PORT="5669"
+APP_NAME="mimocode"
 WRAPPER_PORT="5670"
-WRAPPER_SCRIPT="/var/apps/mimocode/target/server/uwrapper.py"
+MIMO_PORT="5669"
 PID_DIR="/var/apps/mimocode/var"
-MIMO_PID="$PID_DIR/mimo.pid"
 WRAPPER_PID="$PID_DIR/wrapper.pid"
-MIMO_LOG="$PID_DIR/mimo.log"
 WRAPPER_LOG="$PID_DIR/wrapper.log"
+MIMO_PID="$PID_DIR/mimo.pid"
+WRAPPER_SCRIPT="/var/apps/mimocode/target/server/uwrapper.py"
 LINK_TARGET="/usr/local/bin/mimo"
 APP_BIN="/var/apps/mimocode/target/bin/mimo"
 
-mkdir -p "$PID_DIR"
+mkdir -p "$PID_DIR" /var/apps/mimocode/etc
+
+sync_appcenter_status() {
+    local status="$1"
+    local is_stop="true"
+    [ "$status" = "stop" ] && is_stop="true"
+    sudo -u postgres psql -d appcenter -c "UPDATE app SET status='${status}', is_stop=${is_stop}, updated_at=now() WHERE app_name='${APP_NAME}';" >/dev/null 2>&1 || true
+}
+
+port_listening() {
+    ss -tln 2>/dev/null | grep -q ":$1 "
+}
+
+pid_alive() {
+    [ -f "$1" ] && kill -0 "$(cat "$1" 2>/dev/null)" 2>/dev/null
+}
 
 case "$1" in
 start)
-    # Ensure symlink exists (does NOT remove on stop)
     ln -sf "$APP_BIN" "$LINK_TARGET" 2>/dev/null || true
-
-    # --- mimo web backend ---
-    if ! kill -0 $(cat "$MIMO_PID" 2>/dev/null) 2>/dev/null; then
-        nohup "$MIMO_BIN" web --hostname 0.0.0.0 --port "$MIMO_PORT" > "$MIMO_LOG" 2>&1 &
-        echo $! > "$MIMO_PID"
-        # Wait for port (poll up to 10s)
-        for i in $(seq 1 20); do
-            ss -tlnp 2>/dev/null | grep -q ":$MIMO_PORT " && break
-            sleep 0.5
-        done
+    if [ ! -x "$APP_BIN" ]; then
+        echo "mimo binary not executable: $APP_BIN" >> "$WRAPPER_LOG"
+        sync_appcenter_status "stop"
+        exit 1
     fi
-
-    # --- wrapper UI ---
-    if ! kill -0 $(cat "$WRAPPER_PID" 2>/dev/null) 2>/dev/null; then
-        nohup python3 "$WRAPPER_SCRIPT" "$WRAPPER_PORT" > "$WRAPPER_LOG" 2>&1 &
+    if [ ! -f "$WRAPPER_SCRIPT" ]; then
+        echo "wrapper missing: $WRAPPER_SCRIPT" >> "$WRAPPER_LOG"
+        sync_appcenter_status "stop"
+        exit 1
+    fi
+    if port_listening "$WRAPPER_PORT" && ! pid_alive "$WRAPPER_PID"; then
+        echo "port $WRAPPER_PORT already in use by another process" >> "$WRAPPER_LOG"
+        sync_appcenter_status "stop"
+        exit 1
+    fi
+    if ! pid_alive "$WRAPPER_PID"; then
+        nohup python3 "$WRAPPER_SCRIPT" "$WRAPPER_PORT" >> "$WRAPPER_LOG" 2>&1 &
         echo $! > "$WRAPPER_PID"
-        for i in $(seq 1 10); do
-            ss -tlnp 2>/dev/null | grep -q ":$WRAPPER_PORT " && break
-            sleep 0.3
-        done
     fi
-
-    sudo -u postgres psql -d appcenter -c "UPDATE app SET status='running' WHERE app_name='mimocode';" 2>/dev/null || true
-    exit 0
-    ;;
-
-stop)
-    for f in "$WRAPPER_PID" "$MIMO_PID"; do
-        [ -f "$f" ] && kill $(cat "$f") 2>/dev/null || true
-        rm -f "$f"
+    for i in $(seq 1 30); do
+        port_listening "$WRAPPER_PORT" && break
+        sleep 0.4
     done
+    if port_listening "$WRAPPER_PORT"; then
+        sync_appcenter_status "running"
+        exit 0
+    fi
+    echo "wrapper failed to listen on $WRAPPER_PORT" >> "$WRAPPER_LOG"
+    sync_appcenter_status "stop"
+    exit 1
+    ;;
+stop)
+    if pid_alive "$WRAPPER_PID"; then
+        kill "$(cat "$WRAPPER_PID")" 2>/dev/null || true
+        for i in $(seq 1 15); do
+            pid_alive "$WRAPPER_PID" || break
+            sleep 0.2
+        done
+        pid_alive "$WRAPPER_PID" && kill -9 "$(cat "$WRAPPER_PID")" 2>/dev/null || true
+    fi
+    rm -f "$WRAPPER_PID"
+    if pid_alive "$MIMO_PID"; then
+        kill "$(cat "$MIMO_PID")" 2>/dev/null || true
+        sleep 1
+        pid_alive "$MIMO_PID" && kill -9 "$(cat "$MIMO_PID")" 2>/dev/null || true
+    fi
+    rm -f "$MIMO_PID"
     pkill -f "uwrapper.py $WRAPPER_PORT" 2>/dev/null || true
     pkill -f "mimo web.*--port $MIMO_PORT" 2>/dev/null || true
-    # NOTE: /usr/local/bin/mimo symlink is NOT removed on stop,
-    # so CLI usage still works when the app is disabled.
+    sync_appcenter_status "stop"
     exit 0
     ;;
-
 status)
-    # Check wrapper (port 5670)
-    WRAPPER_OK=false
-    kill -0 $(cat "$WRAPPER_PID" 2>/dev/null) 2>/dev/null && WRAPPER_OK=true
-    ss -tlnp 2>/dev/null | grep -q "$WRAPPER_PORT" && WRAPPER_OK=true
-    pgrep -f "uwrapper.py" >/dev/null && WRAPPER_OK=true
-
-    # Check mimo web (port 5669)
-    MIMO_OK=false
-    kill -0 $(cat "$MIMO_PID" 2>/dev/null) 2>/dev/null && MIMO_OK=true
-    ss -tlnp 2>/dev/null | grep -q ":$MIMO_PORT " && MIMO_OK=true
-    pgrep -f "mimo web.*--port $MIMO_PORT" >/dev/null && MIMO_OK=true
-
-    # Both must be OK for status=0
-    $WRAPPER_OK && $MIMO_OK && exit 0
+    if pid_alive "$WRAPPER_PID" && port_listening "$WRAPPER_PORT"; then
+        exit 0
+    fi
+    pgrep -f "uwrapper.py $WRAPPER_PORT" >/dev/null 2>&1 && port_listening "$WRAPPER_PORT" && exit 0
     exit 3
     ;;
-
 *)
     echo "Usage: $0 {start|stop|status}" >&2
     exit 1

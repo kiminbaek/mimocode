@@ -1,752 +1,169 @@
-/* MiMo Code Deep Integration v0.6.0 — Enhanced Frontend SPA */
+/* MiMo Code fnOS App v0.10.4 */
 const $ = s => document.querySelector(s);
-const $$ = s => document.querySelectorAll(s);
-const host = location.hostname;
-const content = $('#content');
-let currentView = 'dashboard';
+const $$ = s => Array.from(document.querySelectorAll(s));
+const state = { token: localStorage.getItem('mimocode_token') || '', setup: false, status: null, providers: [], presets: [], config: {}, view: 'workspace', sessions: [], toolbox: {} };
+const OFFICIAL_MODELS = ['mimo/mimo-auto','xiaomi/mimo-v2-flash','xiaomi/mimo-v2-omni','xiaomi/mimo-v2-pro','xiaomi/mimo-v2.5','xiaomi/mimo-v2.5-pro','xiaomi/mimo-v2.5-pro-ultraspeed'];
 
-// Toast notification
-function toast(msg, type = 'success') {
-  const t = document.createElement('div');
-  t.className = 'toast ' + type;
-  const icon = { success: '✅', error: '❌', info: 'ℹ️', warn: '⚠️' }[type] || '';
-  t.innerHTML = icon + ' ' + msg;
-  t.onclick = () => t.remove();
-  document.body.appendChild(t);
-  setTimeout(() => t.remove(), 4000);
-}
+function esc(s){ return String(s ?? '').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function toast(msg,type='ok'){ const el=document.createElement('div'); el.className='toast '+type; el.textContent=msg; document.body.appendChild(el); setTimeout(()=>el.remove(),4200); }
+async function copyText(text){ await navigator.clipboard.writeText(text); toast('已复制到剪贴板'); }
+function timeText(ts){ if(!ts)return '-'; return new Date(ts*1000).toLocaleString('zh-CN'); }
 
-// API fetch helper
-async function api(path, opts) {
-  try {
-    const r = await fetch('/api/' + path, opts);
-    if (!r.ok) {
-      const err = await r.text().catch(() => '');
-      return { error: `HTTP ${r.status}: ${err.slice(0, 200)}` };
-    }
-    return await r.json();
-  } catch (e) {
-    return { error: e.message };
+async function api(path, opts={}){
+  const headers=Object.assign({'Content-Type':'application/json'},opts.headers||{});
+  if(state.token) headers.Authorization='Bearer '+state.token;
+  const res=await fetch('/api/'+path,Object.assign({},opts,{headers}));
+  const text=await res.text(); let data;
+  try{data=text?JSON.parse(text):{};}catch(e){data={error:text||e.message};}
+  if(!res.ok){
+    if(res.status===401 && !path.startsWith('auth/')){ localStorage.removeItem('mimocode_token'); state.token=''; showAuth('登录已过期，请重新登录'); }
+    throw Object.assign(new Error(data.error||('HTTP '+res.status)),{data,status:res.status});
   }
+  return data;
 }
 
-// Router
-function navigate(view) {
-  currentView = view;
-  $$('.nav-item').forEach(n => {
-    n.classList.toggle('active', n.dataset.view === view);
-  });
-  const fns = {
-    dashboard: renderDashboard,
-    providers: renderProviders,
-    sessions: renderSessions,
-    stats: renderStats,
-    settings: renderSettings,
-    upgrade: renderUpgrade,
-    logs: renderLogs,
-    agents: renderAgents,
-    mcp: renderMcp,
-    acp: renderAcp,
-    debug: renderDebug,
-  };
-  if (view === 'chat') {
-    content.innerHTML = '';
-    const iframe = document.createElement('iframe');
-    iframe.className = 'chat-container';
-    iframe.src = 'http://' + host + ':5669/';
-    content.appendChild(iframe);
-    return;
-  }
-  const fn = fns[view];
-  if (fn) fn();
+function showAuth(msg=''){
+  $('#mainView').classList.add('hidden'); $('#authView').classList.remove('hidden');
+  $('#passwordInput').value=''; $('#authMsg').textContent=msg; $('#authMsg').className=msg?'msg err':'msg';
+  $('#authHint').textContent=state.setup?'请输入管理密码进入 MiMo Code。':'首次使用：请设置一个至少 8 位的管理密码。';
+  $('#passwordInput').placeholder=state.setup?'管理密码':'设置管理密码（至少 8 位）';
+  $('#authBtn').textContent=state.setup?'登录':'初始化并进入';
 }
+function showMain(){ $('#authView').classList.add('hidden'); $('#mainView').classList.remove('hidden'); }
 
-// Init nav
-$$('.nav-item').forEach(n => {
-  n.addEventListener('click', () => navigate(n.dataset.view));
-});
-
-// =================== Dashboard ===================
-async function renderDashboard() {
-  content.innerHTML = '<div class="dashboard"><div class="loading">加载中...</div></div>';
-  const data = await api('status');
-  const running = data.mimo_web;
-
-  const dot = $('#statusDot');
-  dot.className = 'status-dot' + (running ? ' running' : '');
-
-  content.innerHTML = `
-    <div class="dashboard">
-      <div class="dash-grid">
-        <div class="dash-card ${running ? 'green' : 'red'}">
-          <h3>服务状态</h3>
-          <div class="value">${running ? '运行中' : '已停止'}</div>
-          <div class="sub">PID: ${data.mimo_web_pid || '-'} | 端口 ${data.mimo_port_open ? '✓ 5669' : '✗ 5669'}</div>
-        </div>
-        <div class="dash-card accent">
-          <h3>MiMo Code 版本</h3>
-          <div class="value">v${data.version || '?'}</div>
-          <div class="sub">包装器 v0.5.0 | 运行 ${data.uptime || '-'}</div>
-        </div>
-        <div class="dash-card yellow">
-          <h3>可用模型</h3>
-          <div class="value">${data.models_count || 0}</div>
-          <div class="sub">已加载 Provider 模型数量</div>
-        </div>
-        <div class="dash-card">
-          <h3>快捷操作</h3>
-          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
-            <button class="btn btn-primary btn-sm" onclick="navigate('chat')">💬 新建会话</button>
-            <button class="btn btn-ghost btn-sm" onclick="navigate('sessions')">📋 历史会话</button>
-            <button class="btn btn-ghost btn-sm" onclick="navigate('providers')">🔑 Provider</button>
-            <button class="btn btn-ghost btn-sm" onclick="navigate('upgrade')">⬆ 检查更新</button>
-          </div>
-        </div>
-      </div>
-      <div class="info-banner">
-        <strong>💡 提示：</strong>需要帮助？会话按钮、查看文档。
-        <button class="btn btn-ghost btn-xs" onclick="navigate('settings')">⚙ 设置</button>
-      </div>
-    </div>`;
+async function init(){
+  bindStaticEvents();
+  try{
+    const s=await api('auth/status'); state.setup=!!s.setup;
+    if(!state.setup || !state.token) return showAuth();
+    await refreshAll(); showMain(); navigate('workspace');
+  }catch(e){ showAuth(e.message); }
 }
+function bindStaticEvents(){
+  $('#authBtn').onclick=handleAuth;
+  $('#passwordInput').addEventListener('keydown',e=>{if(e.key==='Enter')handleAuth();});
+  $('#clearTokenBtn').onclick=()=>{localStorage.removeItem('mimocode_token');state.token='';toast('本机登录缓存已清除');};
+  $('#logoutBtn').onclick=async()=>{try{await api('auth/logout',{method:'POST',body:'{}'});}catch(e){} localStorage.removeItem('mimocode_token');state.token='';showAuth('已退出登录');};
+  $$('.tab').forEach(t=>t.onclick=()=>navigate(t.dataset.view));
+}
+async function handleAuth(){
+  const password=$('#passwordInput').value;
+  try{
+    const path=state.setup?'auth/login':'auth/setup';
+    const r=await api(path,{method:'POST',body:JSON.stringify({password})});
+    state.token=r.token; localStorage.setItem('mimocode_token',r.token); await refreshAll(); showMain(); navigate('workspace');
+  }catch(e){ $('#authMsg').textContent=e.data?.suggestion||e.message; $('#authMsg').className='msg err'; }
+}
+async function refreshAll(){
+  state.status=await api('status');
+  const p=await api('providers'); state.providers=p.providers||[]; state.presets=p.presets||[]; state.config=p.config||{};
+  try{ state.sessions=(await api('sessions')).sessions||[]; }catch(e){ state.sessions=[]; }
+  $('#statusLine').innerHTML=`${state.status.mimo_open?'<span class="dot ok"></span>':'<span class="dot bad"></span>'} 服务${esc(state.status.friendly.service)} · Provider ${esc(state.status.friendly.provider)} · Wrapper v${esc(state.status.wrapper_version)}`;
+  const toolTab=document.querySelector('[data-view="toolbox"]'); if(toolTab) toolTab.classList.toggle('hidden', !state.config.toolbox_enabled);
+}
+function navigate(view){ if(view==='toolbox' && !state.config.toolbox_enabled) view='advanced'; state.view=view; const content=$('#content'); if(content) content.classList.toggle('official-content', view==='official'); $$('.tab').forEach(t=>t.classList.toggle('active',t.dataset.view===view)); ({workspace:renderWorkspace,official:renderOfficialChat,providers:renderProviders,sessions:renderSessions,logs:renderLogs,advanced:renderAdvanced,toolbox:renderToolbox}[view]||renderWorkspace)(); }
 
-// =================== Providers ===================
-async function renderProviders() {
-  content.innerHTML = '<div class="page"><div class="loading">加载中...</div></div>';
-  const data = await api('providers');
-  const providers = data.providers || [];
-
-  let html = '<div class="page"><h2>🔑 Provider 管理</h2>';
-
-  // Add form
-  html += `<div class="card">
-    <h3>添加 / 更新 Provider</h3>
-    <div class="form-row">
-      <input id="provName" class="input" placeholder="Provider 名称 (如 openai, deepseek)" style="flex:1;">
-      <input id="provKey" class="input" type="password" placeholder="API Key" style="flex:1.5;">
+function statusCards(){ const f=state.status?.friendly||{}; return `<div class="status-grid">
+  ${card('MiMo 服务',f.service,state.status?.mimo_open?'ok':'warn')}
+  ${card('Web 入口',f.web,state.status?.mimo_open?'ok':'warn')}
+  ${card('Provider',f.provider,state.status?.provider_configured?'ok':'warn')}
+  ${card('当前模型',f.model,state.status?.default_model?'ok':'warn')}
+  ${card('CLI',f.cli,state.status?.cli_ok?'ok':'warn')}
+</div>`; }
+function card(k,v,type=''){ return `<div class="stat ${type}"><div class="k">${esc(k)}</div><div class="v">${esc(v)}</div></div>`; }
+function providerGuide(){
+  if(state.providers.length || state.config.default_model) return '';
+  const opts=state.presets.map(p=>`<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('');
+  return `<section class="panel guide"><div class="panel-head"><div><h2>首次配置向导</h2><p>推荐先用 MiMo 官方默认模型 <b>mimo/mimo-auto</b>，限时免费；第三方服务商再填写 Key。</p></div></div>
+    <div class="form three">
+      <label>服务商<select id="guidePreset">${opts}</select></label>
+      <label>接口地址 Base URL<input id="guideBase" class="input" placeholder="官方模型无需填写"></label>
+      <label>默认模型<select id="guideModelSelect"></select><input id="guideModel" class="input hidden" placeholder="模型名"></label>
+      <label class="span2">API Key<input id="guideKey" class="input" type="password" placeholder="官方模型无需填写；第三方 Key 只保存在本机 NAS"></label>
+      <label>显示名称<input id="guideName" class="input" placeholder="服务商显示名称"></label>
     </div>
-    <div class="form-row">
-      <input id="provUrl" class="input" placeholder="Base URL (可选的)" style="flex:1;">
-    </div>
-    <button class="btn btn-primary" onclick="addProvider()">添加</button>
-    <span id="provMsg" style="margin-left:12px;font-size:13px;"></span>
-  </div>`;
-
-  // List
-  html += '<div class="card"><h3>已配置 Provider</h3>';
-  if (providers.length === 0) {
-    html += '<p class="muted">暂无 Provider，请添加 API Key</p>';
-  } else {
-    html += '<table class="table"><thead><tr><th>ID</th><th>Base URL</th><th>API Key</th><th>操作</th></tr></thead><tbody>';
-    for (const p of providers) {
-      const masked = p.key ? p.key.slice(0, 8) + '...' + p.key.slice(-4) : '-';
-      html += `<tr>
-        <td><strong>${p.id}</strong></td>
-        <td class="muted">${p.url || '-'}</td>
-        <td><code>${masked}</code></td>
-        <td>
-          <button class="btn btn-sm btn-ghost" onclick="testProvider('${p.id}')">测试</button>
-          <button class="btn btn-sm btn-danger" onclick="removeProvider('${p.id}')">删除</button>
-        </td>
-      </tr>`;
-    }
-    html += '</tbody></table>';
-  }
-  html += '</div></div>';
-  content.innerHTML = html;
+    <div class="actions"><button class="btn primary" onclick="saveGuideProvider()">保存并开始使用</button><span id="guideHint" class="hint"></span></div>
+  </section>`;
 }
-
-window.addProvider = async function() {
-  const name = $('#provName').value.trim();
-  const key = $('#provKey').value.trim();
-  const url = $('#provUrl').value.trim();
-  if (!name || !key) { $('#provMsg').textContent = '名称和 API Key 必填'; return; }
-  const r = await api('providers/add', {
-    method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({provider: name, api_key: key, base_url: url || undefined}),
-  });
-  $('#provMsg').textContent = r.message || r.error;
-  if (r.success) { $('#provKey').value = ''; $('#provUrl').value = ''; setTimeout(renderProviders, 1000); }
-};
-
-window.removeProvider = async function(id) {
-  if (!confirm(`确定删除 Provider: ${id}？`)) return;
-  const r = await api('providers/remove', {
-    method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({provider: id}),
-  });
-  if (r.success) toast(r.message); else toast(r.error, 'error');
-  renderProviders();
-};
-
-window.testProvider = async function(id) {
-  const btn = event.target;
-  btn.disabled = true; btn.textContent = '测试中...';
-  const r = await api('providers/test/' + id);
-  btn.disabled = false;
-  if (r.success) {
-    toast(`${id}: ${r.message}`, 'success');
-    btn.textContent = '✓ 已连接';
-    setTimeout(() => btn.textContent = '测试', 3000);
-  } else {
-    toast(`${id}: ${r.error || '连接失败'}`, 'error');
-    btn.textContent = '✗ 失败';
-    setTimeout(() => btn.textContent = '测试', 3000);
+function fillPreset(){
+  const id=$('#guidePreset')?.value; const p=state.presets.find(x=>x.id===id)||{};
+  const official=!!p.official || id==='mimo_official';
+  if($('#guideBase')){ $('#guideBase').value=p.base_url||''; $('#guideBase').disabled=official; $('#guideBase').placeholder=official?'官方模型无需 Base URL':'https://api.example.com/v1'; }
+  if($('#guideKey')){ $('#guideKey').value=''; $('#guideKey').disabled=official; $('#guideKey').placeholder=official?'官方模型无需 API Key':'只保存在本机 NAS'; }
+  if($('#guideName')) $('#guideName').value=p.name||'';
+  const sel=$('#guideModelSelect'), inp=$('#guideModel');
+  if(sel){
+    const models=p.models||OFFICIAL_MODELS;
+    sel.innerHTML=models.map(m=>`<option value="${esc(m)}">${esc(m)}${m==='mimo/mimo-auto'?'（官方默认 / 限时免费）':''}</option>`).join('');
+    sel.value=p.model||models[0]||''; sel.classList.toggle('hidden', !official); inp.classList.toggle('hidden', official); if(!official) inp.value=p.model||'';
   }
-};
-
-// =================== Sessions ===================
-async function renderSessions() {
-  content.innerHTML = '<div class="page"><div class="loading">加载中...</div></div>';
-  const data = await api('sessions');
-  const sessions = data.sessions || [];
-
-  let html = '<div class="page"><h2>📋 历史会话</h2><div class="card">';
-  if (sessions.length === 0) {
-    html += '<p class="muted">暂无会话记录</p>';
-  } else {
-    html += '<table class="table"><thead><tr><th>名称</th><th>ID</th><th>模型</th><th>创建时间</th><th>操作</th></tr></thead><tbody>';
-    for (const s of sessions) {
-      html += `<tr>
-        <td>${s.name}</td>
-        <td><code>${(s.id || '').slice(0, 12)}...</code></td>
-        <td>${s.model || '-'}</td>
-        <td class="muted">${s.created || '-'}</td>
-        <td>
-          <button class="btn btn-sm btn-ghost" onclick="exportSession('${s.id}')">导出</button>
-          <button class="btn btn-sm btn-danger" onclick="deleteSession('${s.id}')">删除</button>
-        </td>
-      </tr>`;
-    }
-    html += '</tbody></table>';
-  }
-  html += '</div></div>';
-  content.innerHTML = html;
+  if($('#guideHint')) $('#guideHint').textContent=p.hint||'';
 }
-
-window.exportSession = async function(id) {
-  const r = await api('sessions/' + id + '/export');
-  if (r.success) {
-    const blob = new Blob([JSON.stringify(r.data, null, 2)], {type: 'application/json'});
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = `session_${id.slice(0, 8)}.json`; a.click();
-    URL.revokeObjectURL(url);
-    toast('导出成功');
-  } else {
-    toast(r.error || '导出失败', 'error');
-  }
-};
-
-window.deleteSession = async function(id) {
-  if (!confirm('确定删除此会话？')) return;
-  const r = await api('sessions/delete', {
-    method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({session_id: id}),
-  });
-  if (r.success) toast(r.message); else toast(r.error, 'error');
-  renderSessions();
-};
-
-// =================== Stats ===================
-async function renderStats() {
-  content.innerHTML = '<div class="page"><div class="loading">加载中...</div></div>';
-  const data = await api('stats');
-  const stats = data.stats || {};
-
-  let html = '<div class="page"><h2>📊 用量统计</h2><div class="card">';
-  const entries = Object.entries(stats);
-  if (entries.length === 0) {
-    html += '<p class="muted">暂无统计数据，请先使用会话</p>';
-  } else {
-    html += '<table class="table"><tbody>';
-    for (const [k, v] of entries) {
-      html += `<tr><td><strong>${k}</strong></td><td>${v}</td></tr>`;
-    }
-    html += '</tbody></table>';
-  }
-  html += '</div></div>';
-  content.innerHTML = html;
+async function saveGuideProvider(){
+  const id=$('#guidePreset').value; const p=state.presets.find(x=>x.id===id)||{}; const official=!!p.official || id==='mimo_official';
+  const model=official?$('#guideModelSelect').value:$('#guideModel').value;
+  try{
+    await api('providers/save',{method:'POST',body:JSON.stringify({id,name:$('#guideName').value||p.name,base_url:$('#guideBase').value,api_key:$('#guideKey').value,model})});
+    toast('已保存配置'); await refreshAll(); renderWorkspace();
+  }catch(e){toast(e.data?.suggestion||e.message,'err');}
 }
-
-// =================== Settings ===================
-async function renderSettings() {
-  content.innerHTML = '<div class="page"><div class="loading">加载中...</div></div>';
-  const data = await api('config');
-  const cfg = data.config || {};
-  const mirrors = data.mirrors || {};
-
-  let html = '<div class="page"><h2>⚙ 设置</h2>';
-
-  // Mirror selection
-  html += '<div class="card"><h3>🌐 镜像源设置（用于检查更新和升级）</h3>';
-  html += '<div class="form-row">';
-  html += '<select id="cfgMirror" class="input" style="flex:1;">';
-  for (const [key, label] of Object.entries({
-    direct: 'github.com (直连)',
-    ghproxy: 'ghproxy.com (推荐)',
-    ghproxy2: 'mirror.ghproxy.com',
-    custom: '自定义',
-  })) {
-    html += `<option value="${key}" ${cfg.mirror === key ? 'selected' : ''}>${label}</option>`;
-  }
-  html += '</select></div>';
-  html += '<div class="form-row" id="customMirrorRow" style="' + (cfg.mirror === 'custom' ? '' : 'display:none') + '">';
-  html += '<input id="cfgCustomUrl" class="input" placeholder="自定义镜像源 URL (如 https://your-mirror.com)" value="' + (cfg.mirror_custom_url || '') + '" style="flex:1;">';
-  html += '</div>';
-  html += `<button class="btn btn-primary" onclick="saveSettings()">保存设置</button>`;
-  html += '<span id="cfgMsg" style="margin-left:12px;font-size:13px;"></span>';
-  html += '</div>';
-
-  // Dark mode toggle
-  html += '<div class="card"><h3>🎨 主题</h3>';
-  const dark = cfg.dark_mode !== false;
-  html += `<label class="toggle-label"><input type="checkbox" id="cfgDark" ${dark ? 'checked' : ''} onchange="toggleDarkMode(this.checked)"> 深色模式</label>`;
-  html += '</div>';
-
-  // App info
-  html += '<div class="card"><h3>📄 应用信息</h3>';
-  html += '<table class="table"><tbody>';
-  html += `<tr><td>应用名称</td><td>MiMo Code</td></tr>`;
-  html += `<tr><td>包装器版本</td><td>v0.5.0</td></tr>`;
-  html += `<tr><td>数据目录</td><td><code>/var/apps/mimocode</code></td></tr>`;
-  html += `<tr><td>日志文件</td><td><code>/var/apps/mimocode/var/mimo.log</code></td></tr>`;
-  html += '</tbody></table>';
-  html += '</div>';
-
-  html += '</div>';
-  content.innerHTML = html;
-
-  // Mirror change handler
-  $('#cfgMirror').addEventListener('change', function() {
-    $('#customMirrorRow').style.display = this.value === 'custom' ? '' : 'none';
-  });
+function renderWorkspace(){
+  const model=state.config.default_model||'mimo/mimo-auto';
+  const nativeUrl=state.status?.native_web_url||`${location.protocol}//${location.hostname}:5669/`;
+  $('#content').innerHTML=`${providerGuide()}<section class="panel hero-panel"><div class="hero-layout"><div><h1>MiMo Code 工作台</h1><p>这里负责服务状态、模型配置和诊断；真正聊天请进入独立的「官方会话」页面。</p><div class="hero-actions"><button class="btn primary" onclick="navigate('official')">进入官方会话</button><button class="btn ghost" onclick="openNativeWeb()">新窗口打开</button><button class="btn ghost" onclick="copyText('${esc(nativeUrl)}')">复制会话地址</button></div></div><div class="hero-status">${statusCards()}</div></div></section>
+  <div class="dashboard-grid"><section class="panel"><h3>当前模型</h3><p><code>${esc(model)}</code></p><p class="hint">首次使用推荐 MiMo 官方模型 <b>mimo/mimo-auto</b>。</p><button class="btn ghost" onclick="navigate('providers')">模型与服务商</button></section><section class="panel"><h3>官方 Web</h3><p>${esc(nativeUrl)}</p><p class="hint">如果应用内页面显示异常，用新窗口打开官方会话。</p><button class="btn ghost" onclick="navigate('official')">进入官方会话页面</button></section><section class="panel"><h3>诊断</h3><p class="hint">服务异常、模型无响应、官方页打不开时，先看日志与建议。</p><button class="btn ghost" onclick="navigate('logs')">日志与建议</button></section><section class="panel"><h3>开发者工具箱</h3><p class="hint">文件、ACP、Agent、CLI 测试默认隐藏。</p><button class="btn ghost" onclick="enableToolboxAndOpenCli()">打开 CLI 快速测试</button></section></div>`;
+  fillPreset();
 }
-
-window.saveSettings = async function() {
-  const cfg = {
-    mirror: $('#cfgMirror').value,
-    mirror_custom_url: $('#cfgCustomUrl') ? $('#cfgCustomUrl').value : '',
-    dark_mode: $('#cfgDark') ? $('#cfgDark').checked : true,
-  };
-  const r = await api('config/save', {
-    method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify(cfg),
-  });
-  $('#cfgMsg').textContent = r.message || r.error;
-  if (r.success) toast('设置已保存');
-};
-
-window.toggleDarkMode = function(checked) {
-  document.documentElement.style.setProperty('--bg', checked ? '#0a0a0f' : '#f5f5f7');
-  document.documentElement.style.setProperty('--bg-surface', checked ? '#12121a' : '#ffffff');
-  document.documentElement.style.setProperty('--bg-elevated', checked ? '#1a1a24' : '#f0f0f2');
-  document.documentElement.style.setProperty('--bg-hover', checked ? '#22222e' : '#e8e8ec');
-  document.documentElement.style.setProperty('--border', checked ? '#2a2a38' : '#dddde0');
-  document.documentElement.style.setProperty('--text', checked ? '#e4e4ec' : '#1a1a2e');
-  document.documentElement.style.setProperty('--text-secondary', checked ? '#8888a0' : '#666680');
-  document.documentElement.style.setProperty('--text-muted', checked ? '#555568' : '#9999a0');
-  saveSettings();
-};
-
-// =================== Upgrade ===================
-async function renderUpgrade() {
-  content.innerHTML = '<div class="page"><div class="loading">加载中...</div></div>';
-  const [statusData, cfgData] = await Promise.all([
-    api('upgrade/status'),
-    api('config'),
-  ]);
-  const cfg = cfgData.config || {};
-  const currentVer = statusData.current_version || '?';
-  const mirror = cfg.mirror || 'direct';
-
-  let html = '<div class="page"><h2>⬆ 检查更新</h2>';
-
-  html += '<div class="card"><h3>当前版本</h3>';
-  html += `<p style="font-size:24px;font-weight:700;">v${currentVer}</p>`;
-  html += `<p class="muted">包装器 v0.5.0</p>`;
-  html += '</div>';
-
-  // Mirror info
-  html += '<div class="card"><h3>🌐 镜像源</h3>';
-  html += `<p>当前使用: <strong>${mirror === 'custom' ? (cfg.mirror_custom_url || '自定义') : mirror}</strong></p>`;
-  html += `<button class="btn btn-ghost btn-sm" onclick="navigate('settings')">修改镜像源</button>`;
-  html += '</div>';
-
-  // Check update button
-  html += '<div class="card"><h3>检查更新</h3>';
-  html += `<button class="btn btn-primary" id="checkUpdateBtn" onclick="checkUpdate()">🔍 检查新版本</button>`;
-  html += '<div id="updateResult" style="margin-top:12px;"></div>';
-  html += '</div>';
-
-  // Upgrade button (hidden until new version found)
-  html += '<div id="upgradePanel" class="card" style="display:none;">';
-  html += '<h3>⬇ 升级</h3>';
-  html += '<div id="upgradeInfo"></div>';
-  html += '<button class="btn btn-primary btn-lg" id="doUpgradeBtn" onclick="doUpgrade()" style="display:none;">⬇ 立即升级</button>';
-  html += '<div id="upgradeProgress" style="margin-top:12px;"></div>';
-  html += '</div>';
-
-  html += '</div>';
-  content.innerHTML = html;
+function renderOfficialChat(){
+  const embedUrl=state.status?.native_web_embed_url||`//${location.hostname}:5669/`;
+  const content=$('#content');
+  content.innerHTML='';
+  content.classList.add('official-content');
+  const iframe=document.createElement('iframe');
+  iframe.id='nativeFrame';
+  iframe.className='official-native-frame';
+  iframe.src=embedUrl;
+  iframe.title='MiMo 官方会话';
+  content.appendChild(iframe);
 }
-
-let _latestVersionInfo = null;
-
-window.checkUpdate = async function() {
-  const btn = $('#checkUpdateBtn');
-  const result = $('#updateResult');
-  btn.disabled = true; btn.textContent = '检查中...';
-  result.innerHTML = '<span class="loading" style="display:inline-block;width:20px;height:20px;"></span> 正在查询...';
-
-  const cfg = (await api('config')).config || {};
-  const mirror = cfg.mirror || 'direct';
-  const custom = cfg.mirror_custom_url || '';
-
-  const r = await api('check-update?mirror=' + encodeURIComponent(mirror) + '&custom_url=' + encodeURIComponent(custom));
-
-  if (r.error) {
-    result.innerHTML = `<div class="alert alert-error">❌ 检查失败：${r.error}</div>`;
-    btn.disabled = false; btn.textContent = '🔍 重试';
-    return;
-  }
-
-  const current = r.current_version || '0.1.0';
-  const latest = r.version || '0.1.0';
-
-  if (r.version && r.version !== current && r.version !== '0.1.0') {
-    _latestVersionInfo = r;
-    result.innerHTML = `<div class="alert alert-success">🎉 发现新版本！v${current} → <strong>v${latest}</strong></div>`;
-    $('#upgradePanel').style.display = '';
-    $('#upgradeInfo').innerHTML = `
-      <p>发布日期：${r.published || '未知'}</p>
-      <p>下载地址：<code style="font-size:11px;word-break:break-all;">${(r.download_url || '').slice(0, 100)}...</code></p>
-    `;
-    $('#doUpgradeBtn').style.display = '';
-    btn.textContent = '✓ 已检查';
-  } else {
-    result.innerHTML = `<div class="alert alert-info">✅ 已是最新版本 v${current}</div>`;
-    btn.disabled = false; btn.textContent = '🔍 再检查';
-  }
-};
-
-window.doUpgrade = async function() {
-  if (!_latestVersionInfo) return;
-  const btn = $('#doUpgradeBtn');
-  const progress = $('#upgradeProgress');
-  btn.disabled = true; btn.textContent = '正在下载升级...';
-  progress.innerHTML = '<span class="loading" style="display:inline-block;width:20px;height:20px;"></span> 下载中（约 135MB，可能需要几分钟）...';
-
-  const r = await api('upgrade/do', {
-    method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({
-      download_url: _latestVersionInfo.download_url,
-      version: _latestVersionInfo.version,
-    }),
-  });
-
-  if (r.success) {
-    progress.innerHTML = `<div class="alert alert-success">${r.message}</div>`;
-    btn.textContent = '✅ 升级完成';
-    setTimeout(() => renderUpgrade(), 2000);
-  } else {
-    progress.innerHTML = `<div class="alert alert-error">❌ 升级失败：${r.error}</div>`;
-    btn.disabled = false; btn.textContent = '重新尝试';
-  }
-};
-
-// =================== Logs ===================
-async function renderLogs() {
-  content.innerHTML = '<div class="page"><div class="loading">加载中...</div></div>';
-  const data = await api('logs?limit=100');
-  const logs = data.logs || [];
-
-  let html = '<div class="page"><h2>📋 运行日志</h2>';
-  html += '<div class="card" style="max-height:600px;overflow-y:auto;font-family:monospace;font-size:12px;line-height:1.6;">';
-  if (logs.length === 0) {
-    html += '<p class="muted">暂无日志</p>';
-  } else {
-    for (const l of logs) {
-      const cls = l.source === 'wrapper' ? 'log-wrapper' : 'log-mimo';
-      html += `<div class="${cls}">${escapeHtml(l.text)}</div>`;
-    }
-  }
-  html += '</div>';
-  html += '<div style="margin-top:8px;">';
-  html += `<button class="btn btn-ghost btn-sm" onclick="renderLogs()">🔄 刷新</button>`;
-  html += `<button class="btn btn-ghost btn-sm" onclick="clearLogs()">🗑 清空</button>`;
-  html += '</div>';
-  html += '</div>';
-  content.innerHTML = html;
+function openNativeWeb(){ window.open(state.status?.native_web_url||`${location.protocol}//${location.hostname}:5669/`,'_blank'); }
+function reloadNativeFrame(){ const f=$('#nativeFrame'); if(f) f.src=f.src; }
+async function enableToolboxAndOpenCli(){ if(!state.config.toolbox_enabled){ await api('config',{method:'POST',body:JSON.stringify({toolbox_enabled:true})}); await refreshAll(); } navigate('toolbox'); setTimeout(toolCommand,80); }
+function appendBubble(role, html){ const box=$('#chatThread'); if(!box){ toolCommand(); setTimeout(()=>appendBubble(role, html),50); return null; } const div=document.createElement('div'); div.className='bubble '+role; div.innerHTML=html; box.appendChild(div); box.scrollTop=box.scrollHeight; return div; }
+function quickAsk(text){ $('#cmdKey').value='run'; $('#cmdMsg').value=text; runToolCommand(); }
+function copyCurrentCli(){ const msg=$('#cmdMsg')?.value || '你的问题'; const model=state.config.default_model || 'mimo/mimo-auto'; copyText(`mimo run --model ${model} ${JSON.stringify(msg)}`); }
+function emptyOutputHtml(r){ return `<b>MiMo</b><div class="empty-reply">MiMo 命令执行成功，但没有返回可显示内容。</div><div class="suggest">${esc(r.suggestion||'建议先测试模型，或查看日志与建议。')}</div><ol>${(r.next_steps||[]).map(x=>`<li>${esc(x)}</li>`).join('')}</ol>`; }
+async function runChat(){
+  const input=$('#chatInput'); const msg=(input?.value||'').trim(); if(!msg){toast('先输入一句话'); return;}
+  const project_dir=$('#projectDir')?.value || state.config.project_dir, model=$('#chatModel')?.value||'mimo/mimo-auto';
+  appendBubble('user', `<b>你</b><div>${esc(msg).replaceAll('\n','<br>')}</div>`); input.value='';
+  const pending=appendBubble('assistant thinking', '<b>MiMo</b><div>正在思考...</div>'); if($('#sendBtn')) $('#sendBtn').disabled=true;
+  try{
+    const r=await api('chat/run',{method:'POST',body:JSON.stringify({message:msg,project_dir,model,session_id:state.config.last_session_id||''})});
+    if(pending){ pending.className='bubble assistant'; pending.innerHTML=r.empty_output?emptyOutputHtml(r):`<b>MiMo</b><pre>${esc(r.output||'')}</pre>`; }
+    await refreshAll();
+  }catch(e){
+    if(pending){ pending.className='bubble assistant error'; pending.innerHTML=`<b>MiMo</b><div>${esc(e.data?.suggestion||e.message)}</div><pre>${esc(e.data?.error||'')}</pre>`; }
+  }finally{ if($('#sendBtn')) $('#sendBtn').disabled=false; }
 }
+async function validateProject(){ try{const r=await api('project/validate',{method:'POST',body:JSON.stringify({path:$('#projectDir').value})}); if(r.ok){toast('项目目录已保存'); await refreshAll();} else toast(r.error,'err');}catch(e){toast(e.message,'err');} }
+async function loadCli(){ try{const r=await api('cli'); $('#cliBox').innerHTML=(r.commands||[]).map(c=>`<div class="cli-line"><div><b>${esc(c.title)}</b><code>${esc(c.command)}</code></div><button class="btn compact" onclick="copyText('${esc(c.command).replaceAll('&#39;','\\&#39;')}')">复制</button></div>`).join('');}catch(e){} }
+function renderProviders(){ $('#content').innerHTML=`<section class="panel"><div class="panel-head"><div><h2>模型与服务商</h2><p>官方模型可直接选用；第三方服务商需要填写 API Key。</p></div><button class="btn ghost" onclick="refreshAll().then(renderProviders)">刷新</button></div>${providerGuide()}<div class="provider-list">${state.providers.map(p=>`<div class="provider-card"><h3>${esc(p.name)}</h3><p>模型：${esc(p.model||'-')}</p><p>Key：${p.has_key?'已保存':'未保存/无需 Key'}</p></div>`).join('')||'<div class="empty">还没有第三方 Provider；官方模型可直接使用。</div>'}</div><details open><summary>官方模型</summary><div class="tag-grid">${OFFICIAL_MODELS.map(m=>`<button class="btn ghost compact" onclick="saveOfficialModel('${m}')">${esc(m)}${m==='mimo/mimo-auto'?' · 默认限免':''}</button>`).join('')}</div></details></section>`; fillPreset(); }
+async function saveOfficialModel(model){ try{await api('providers/save',{method:'POST',body:JSON.stringify({id:'mimo_official',name:'MiMo 官方模型',model})}); toast('已切换到 '+model); await refreshAll(); renderProviders();}catch(e){toast(e.message,'err');} }
+function renderSessions(){ $('#content').innerHTML=`<section class="panel"><div class="panel-head"><div><h2>会话历史</h2><p>本应用记录你从工作台发起的会话，便于继续使用。</p></div></div>${state.sessions.map(s=>`<div class="row"><div><b>${esc(s.title)}</b><p>${esc(s.project_dir)} · ${esc(s.model||'-')} · ${timeText(s.updated_at)}</p></div><button class="btn compact danger" onclick="deleteSession('${esc(s.id)}')">删除</button></div>`).join('')||'<div class="empty">暂无会话</div>'}</section>`; }
+async function deleteSession(id){ if(!confirm('删除这条会话记录？'))return; await api('sessions/delete',{method:'POST',body:JSON.stringify({id})}); await refreshAll(); renderSessions(); }
+async function renderLogs(){ $('#content').innerHTML='<section class="panel"><h2>日志与建议</h2><p>只展示和用户操作相关的错误建议。</p><div id="logBox" class="output">加载中...</div></section>'; try{const r=await api('logs'); $('#logBox').innerHTML=(r.issues||[]).map(i=>`<div class="issue"><b>${esc(i.title)}</b><div>${esc(i.detail)}</div><div class="suggest">建议：${esc(i.suggestion)}</div></div>`).join('')+`<details><summary>原始日志</summary><pre>${esc(r.raw||'')}</pre></details>`;}catch(e){$('#logBox').textContent=e.message;} }
+function renderAdvanced(){ $('#content').innerHTML=`<section class="panel"><div class="panel-head"><div><h2>高级设置</h2><p>MCP、配置导入导出和开发者工具箱默认隐藏，避免主界面变成后台管理系统。</p></div></div><div class="form two"><label>自动守护 MiMo Web<select id="autoRestart"><option value="true">开启</option><option value="false">关闭</option></select></label><label>开发者工具箱<select id="toolboxEnabled"><option value="false">隐藏</option><option value="true">显示</option></select></label></div><div class="actions"><button class="btn primary" onclick="saveAdvanced()">保存设置</button><button class="btn ghost" onclick="exportConfig(false)">导出脱敏配置</button><button class="btn danger" onclick="exportConfig(true)">导出含 Key 配置</button><button class="btn ghost" onclick="checkUpdate()">检查更新</button><button class="btn ghost" onclick="loadMcp()">查看 MCP</button></div><pre id="advancedOut" class="output small">高级能力默认只读或需二次确认。</pre></section>`; $('#autoRestart').value=String(!!state.config.auto_restart_mimo); $('#toolboxEnabled').value=String(!!state.config.toolbox_enabled); }
+async function saveAdvanced(){ await api('config',{method:'POST',body:JSON.stringify({auto_restart_mimo:$('#autoRestart').value==='true',toolbox_enabled:$('#toolboxEnabled').value==='true'})}); toast('已保存'); await refreshAll(); renderAdvanced(); }
+async function exportConfig(include_keys){ const r=await api('config/export?include_keys='+(include_keys?'true':'false')); $('#advancedOut').textContent=JSON.stringify(r,null,2); }
+async function checkUpdate(){ const r=await api('update/check'); $('#advancedOut').textContent=JSON.stringify(r,null,2); }
+async function loadMcp(){ const r=await api('mcp'); $('#advancedOut').textContent=r.raw||JSON.stringify(r,null,2); }
+async function renderToolbox(){ $('#content').innerHTML=`<section class="panel"><div class="panel-head"><div><h2>开发者工具箱</h2><p>默认隐藏；只提供项目内文件预览、轻量状态、ACP/Agent 只读和 MiMo 命令白名单。</p></div><button class="btn ghost" onclick="navigate('advanced')">返回高级设置</button></div><div class="tool-grid"><button class="btn primary" onclick="toolFiles()">项目文件</button><button class="btn" onclick="toolPerf()">运行状态</button><button class="btn" onclick="toolAcp()">ACP 服务</button><button class="btn" onclick="toolAgents()">Agent 配置</button><button class="btn" onclick="toolCommand()">MiMo 命令助手</button></div><div id="toolBox" class="output small">请选择一个工具。所有高风险能力均受限。</div></section>`; }
+async function toolFiles(path=''){ const r=await api('toolbox/files?path='+encodeURIComponent(path)); if(r.type==='dir') $('#toolBox').innerHTML=`<b>根目录：</b>${esc(r.root)}<br><b>当前：</b>${esc(r.path)}<div class="file-list">${r.entries.map(e=>`<button class="file-row" onclick="toolFiles('${esc(e.path)}')">${e.type==='dir'?'📁':'📄'} ${esc(e.name)} <span>${e.type} · ${e.size}</span></button>`).join('')}</div>`; else $('#toolBox').textContent=r.text||r.error; }
+async function toolPerf(){ const r=await api('toolbox/perf'); $('#toolBox').textContent=JSON.stringify(r,null,2); }
+async function toolAcp(){ const r=await api('toolbox/acp'); $('#toolBox').textContent=r.help||JSON.stringify(r,null,2); }
+async function toolAgents(){ const r=await api('toolbox/agents'); $('#toolBox').textContent=r.raw||JSON.stringify(r,null,2); }
+async function toolCommand(){ $('#toolBox').innerHTML=`<div class="form two"><label>白名单命令<select id="cmdKey"><option value="models">mimo models</option><option value="providers list">mimo providers list</option><option value="mcp list">mimo mcp list</option><option value="debug">mimo debug</option><option value="version">mimo --version</option><option value="run">mimo run</option></select></label><label>run 消息<input id="cmdMsg" class="input" placeholder="仅 mimo run 使用"></label></div><div class="quick-prompts"><button class="btn compact ghost" onclick="quickAsk('在不？请用一句话回复。')">测试模型</button><button class="btn compact ghost" onclick="quickAsk('你是谁？你能帮我做什么？')">你是谁？</button><button class="btn compact ghost" onclick="copyCurrentCli()">复制本次 CLI</button></div><button class="btn primary" onclick="runToolCommand()">执行白名单命令</button><pre id="cmdOut" class="output small"></pre>`; }
+async function runToolCommand(){ try{const r=await api('toolbox/command',{method:'POST',body:JSON.stringify({command:$('#cmdKey').value,message:$('#cmdMsg').value})}); $('#cmdOut').textContent=r.output||JSON.stringify(r,null,2);}catch(e){$('#cmdOut').textContent=e.data?.suggestion||e.message;} }
 
-function escapeHtml(s) {
-  const d = document.createElement('div');
-  d.textContent = s;
-  return d.innerHTML;
-}
-
-window.clearLogs = function() {
-  // Log clearing is not implemented on backend, just reload
-  toast('请在设置中管理日志文件', 'info');
-};
-
-// =================== Agent Management ===================
-async function renderAgents() {
-  content.innerHTML = '<div class="page"><div class="loading">加载Agent列表...</div></div>';
-  const data = await api('agents');
-  if (data.error) {
-    content.innerHTML = '<div class="page"><div class="panel warn">加载失败: ' + data.error + '</div></div>';
-    return;
-  }
-  const ag = data.agents || [];
-  let cards = '';
-  for (const a of ag) {
-    const perms = a.permissions || [];
-    let permHtml = '';
-    for (const p of perms) {
-      const cls = p.action === 'allow' ? 'tag-green' : 'tag-yellow';
-      permHtml += `<div class="tag ${cls}">${p.permission || p.pattern || '?'} → ${p.action}</div>`;
-    }
-    cards += `
-      <div class="panel">
-        <div class="panel-h"><strong>${a.name}</strong> <span class="tag tag-blue">${a.type}</span></div>
-        <div class="panel-b" style="margin-top:8px">
-          ${permHtml || '<span class="muted">无权限条目</span>'}
-        </div>
-      </div>`;
-  }
-
-  content.innerHTML = `
-    <div class="page">
-      <h2>🤖 Agent 管理</h2>
-      <p class="desc">管理 MiMo Code 的 AI Agent（角色与权限）</p>
-      <div class="dash-grid" style="grid-template-columns:1fr 1fr">
-        <div class="dash-card accent">
-          <h3>Agent 数量</h3>
-          <div class="value">${ag.length}</div>
-        </div>
-      </div>
-      <div class="section-title">Agent 列表</div>
-      ${cards || '<div class="panel muted">暂无 Agent</div>'}
-      <div class="section-title">创建新 Agent</div>
-      <div class="panel">
-        <div class="form-row">
-          <input id="agentName" placeholder="Agent 名称 (如 my-assistant)" class="inp" />
-          <input id="agentDesc" placeholder="描述 (如 编程助手)" class="inp" />
-        </div>
-        <div class="form-row">
-          <select id="agentMode" class="inp" style="flex:1">
-            <option value="subagent">子 Agent (subagent)</option>
-            <option value="primary">主要 Agent (primary)</option>
-            <option value="all">全部 (all)</option>
-          </select>
-          <input id="agentTools" placeholder="工具 (如 bash,read,write 留空=全部)" class="inp" style="flex:2" />
-        </div>
-        <div class="form-row">
-          <input id="agentModel" placeholder="模型 (如 openai/gpt-4o, 留空=默认)" class="inp" style="flex:3" />
-          <button class="btn" onclick="createAgent()">创建 Agent</button>
-        </div>
-      </div>
-    </div>`;
-}
-
-async function createAgent() {
-  const name = $('#agentName').value.trim();
-  const desc = $('#agentDesc').value.trim();
-  const mode = $('#agentMode').value;
-  const tools = $('#agentTools').value.trim();
-  const model = $('#agentModel').value.trim();
-  if (!name) { toast('请输入 Agent 名称', 'warn'); return; }
-  const btn = content.querySelector('.btn');
-  btn.disabled = true; btn.textContent = '创建中...';
-  const r = await api('agents/create', {
-    method: 'POST',
-    headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({name, description: desc, mode, tools, model}),
-  });
-  btn.disabled = false; btn.textContent = '创建 Agent';
-  if (r.success) {
-    toast('Agent 创建成功！');
-    renderAgents();
-  } else {
-    toast('创建失败: ' + (r.output || r.error || '未知错误'), 'error');
-  }
-}
-
-// =================== MCP Management ===================
-async function renderMcp() {
-  content.innerHTML = '<div class="page"><div class="loading">加载 MCP 服务器列表...</div></div>';
-  const data = await api('mcp');
-  if (data.error) {
-    content.innerHTML = '<div class="page"><div class="panel warn">加载失败: ' + data.error + '</div></div>';
-    return;
-  }
-  const servers = data.servers || [];
-  let listHtml = servers.map(s =>
-    `<div class="tag tag-blue" style="padding:6px 12px">${s.name}</div>`
-  ).join(' ') || '<span class="muted">暂无 MCP 服务器</span>';
-
-  content.innerHTML = `
-    <div class="page">
-      <h2>🔌 MCP 服务器管理</h2>
-      <p class="desc">Model Context Protocol — 外部工具/数据集成</p>
-      <div class="dash-grid" style="grid-template-columns:1fr 1fr">
-        <div class="dash-card accent">
-          <h3>已配置</h3>
-          <div class="value">${servers.length}</div>
-        </div>
-      </div>
-      <div class="section-title">已添加的 MCP 服务器</div>
-      <div class="panel" style="display:flex;flex-wrap:wrap;gap:8px">${listHtml}</div>
-      <div class="section-title">添加 MCP 服务器</div>
-      <div class="panel">
-        <div class="form-row">
-          <input id="mcpName" placeholder="名称 (如 filesystem-server)" class="inp" />
-          <input id="mcpUrl" placeholder="URL/命令 (如 npx @modelcontextprotocol/server-filesystem /path)" class="inp" style="flex:2" />
-          <button class="btn" onclick="addMcp()">添加</button>
-        </div>
-      </div>
-      <details style="margin-top:8px">
-        <summary class="muted" style="cursor:pointer">原始输出</summary>
-        <pre class="code-block">${escHtml(data.raw || '')}</pre>
-      </details>
-    </div>`;
-}
-
-async function addMcp() {
-  const name = $('#mcpName').value.trim();
-  const url = $('#mcpUrl').value.trim();
-  if (!name) { toast('请输入名称', 'warn'); return; }
-  const btn = content.querySelector('.btn');
-  btn.disabled = true; btn.textContent = '添加中...';
-  const r = await api('mcp/add', {
-    method: 'POST', headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({name, url}),
-  });
-  btn.disabled = false; btn.textContent = '添加';
-  if (r.success) {
-    toast('MCP 服务器已添加');
-    renderMcp();
-  } else {
-    toast('添加失败: ' + (r.output || r.error || '未知错误'), 'error');
-  }
-}
-
-// =================== ACP Server ===================
-async function renderAcp() {
-  content.innerHTML = '<div class="page"><div class="loading">加载 ACP 状态...</div></div>';
-  const status = await api('acp/status');
-  const running = status.running;
-  content.innerHTML = `
-    <div class="page">
-      <h2>🌐 ACP 服务</h2>
-      <p class="desc">Agent Client Protocol — 让外部程序通过 API 连接 MiMo Code</p>
-      <div class="dash-grid" style="grid-template-columns:1fr 1fr 1fr">
-        <div class="dash-card ${running ? 'green' : 'red'}">
-          <h3>服务状态</h3>
-          <div class="value">${running ? '运行中' : '已停止'}</div>
-          <div class="sub">PID: ${status.pid || '-'}</div>
-        </div>
-        <div class="dash-card accent">
-          <h3>端口</h3>
-          <div class="value">${status.port || 5671}</div>
-        </div>
-        <div class="dash-card">
-          <h3>操作</h3>
-          <div style="display:flex;gap:8px;margin-top:8px">
-            ${running
-              ? `<button class="btn btn-danger" onclick="toggleAcp('stop')">停止 ACP</button>`
-              : `<button class="btn" onclick="toggleAcp('start')">启动 ACP</button>`
-            }
-          </div>
-        </div>
-      </div>
-      <div class="panel muted" style="margin-top:8px">
-        启动后，外部程序可通过 <code>http://${host}:${status.port || 5671}</code> 连接 ACP 服务
-      </div>
-    </div>`;
-}
-
-async function toggleAcp(action) {
-  const btn = content.querySelector('.btn, .btn-danger');
-  if (btn) btn.disabled = true;
-  const r = await api('acp/toggle', {
-    method: 'POST', headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({action}),
-  });
-  if (!r.error) {
-    toast(r.message || (action === 'start' ? 'ACP 已启动' : 'ACP 已停止'));
-  } else {
-    toast('操作失败: ' + r.error, 'error');
-  }
-  renderAcp();
-}
-
-// =================== Debug Panel ===================
-async function renderDebug() {
-  content.innerHTML = '<div class="page"><div class="loading">收集诊断信息...</div></div>';
-  const data = await api('debug');
-  if (data.error) {
-    content.innerHTML = '<div class="page"><div class="panel warn">加载失败: ' + data.error + '</div></div>';
-    return;
-  }
-  content.innerHTML = `
-    <div class="page">
-      <h2>🔍 诊断面板</h2>
-      <p class="desc">MiMo Code 运行环境与配置诊断</p>
-      <div class="dash-grid" style="grid-template-columns:1fr 1fr">
-        <div class="dash-card accent">
-          <h3>Wrapper 版本</h3>
-          <div class="value">${data.wrapper_version || '?'}</div>
-          <div class="sub">监听端口 ${data.listening_port || '-'}</div>
-        </div>
-        <div class="dash-card">
-          <h3>运行时间</h3>
-          <div class="value">${fmtUptime(data.uptime || 0)}</div>
-          <div class="sub">${data.var_dir || '-'}</div>
-        </div>
-      </div>
-      ${renderDebugSection('⚙️ 运行配置 (config)', data.config)}
-      ${renderDebugSection('📁 全局路径 (paths)', data.paths)}
-      ${renderDebugSection('🧠 Agent 详情', data.agent_primary)}
-      ${renderDebugSection('🛠️ 可用技能 (skills)', data.skills)}
-      ${renderDebugSection('📂 已知项目 (scrap)', data.scrap)}
-    </div>`;
-}
-
-function renderDebugSection(title, contentText) {
-  if (!contentText) return '';
-  return `
-    <details class="debug-section">
-      <summary><strong>${title}</strong></summary>
-      <pre class="code-block">${escHtml(contentText)}</pre>
-    </details>`;
-}
-
-function fmtUptime(secs) {
-  if (!secs) return '-';
-  const h = Math.floor(secs / 3600);
-  const m = Math.floor((secs % 3600) / 60);
-  const s = secs % 60;
-  if (h > 0) return h + 'h ' + m + 'm';
-  if (m > 0) return m + 'm ' + s + 's';
-  return s + 's';
-}
-
-function escHtml(s) {
-  if (!s) return '';
-  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-}
-
-// =================== Init ===================
-// Auto-refresh status dot
-setInterval(async () => {
-  if (currentView !== 'dashboard') return;
-  const data = await api('status');
-  const dot = $('#statusDot');
-  if (dot) dot.className = 'status-dot' + (data.mimo_web ? ' running' : '');
-}, 10000);
-
-// Load dashboard on start
-renderDashboard();
+init();

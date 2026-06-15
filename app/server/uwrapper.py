@@ -1,993 +1,960 @@
 #!/usr/bin/env python3
-"""MiMo Code fnOS Desktop App — Deep Integration Wrapper v0.6.0
-Provides: Dashboard, Provider Management, Session Management, Stats, 
-Settings, Upgrade, Auto-Restart, Log Viewer, Chat,
-Agent Management, MCP Management, ACP Server, Debug Panel
-All API calls route to `mimo` CLI commands, parsed to JSON for the frontend.
+"""MiMo Code fnOS App Wrapper v0.10.4
+
+User-first wrapper around the official `mimo` binary.
+- opens to the main conversation workspace
+- first-run Provider guide
+- Chinese, actionable status/errors
+- session/project/model helpers
+- safe config import/export and diagnostic bundle
+- no binary replacement from the UI
 """
+from __future__ import annotations
+
+import base64
+import hashlib
+import hmac
 import http.server
 import json
 import os
-import subprocess
-import sys
-import urllib.parse
-import threading
-import time
 import re
+import secrets
 import shutil
 import signal
+import socket
+import subprocess
+import sys
+import tarfile
+import tempfile
+import threading
+import time
+import urllib.parse
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 
+APP_NAME = 'mimocode'
+WRAPPER_VERSION = '0.10.4'
 LISTEN_PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 5670
-MIMO_BIN = '/usr/local/bin/mimo'
-MIMO_PORT = 5669
-AUTH_PATH = '/root/.local/share/mimocode/auth.json'
-PUBLIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'public')
-VAR_DIR = '/var/apps/mimocode/var'
-CONFIG_PATH = os.path.join(VAR_DIR, 'wrapper_config.json')
-LOG_PATH = os.path.join(VAR_DIR, 'mimo.log')
-WRAPPER_LOG_PATH = os.path.join(VAR_DIR, 'wrapper.log')
-PID_DIR = VAR_DIR
+MIMO_PORT = int(os.environ.get('MIMO_PORT', '5669'))
+MIMO_BIN = os.environ.get('MIMO_BIN', '/usr/local/bin/mimo')
+VAR_DIR = Path(os.environ.get('MIMOCODE_VAR_DIR', '/var/apps/mimocode/var'))
+ETC_DIR = Path(os.environ.get('MIMOCODE_ETC_DIR', '/var/apps/mimocode/etc'))
+PUBLIC_DIR = Path(__file__).resolve().parent / 'public'
+AUTH_PATH = ETC_DIR / 'wrapper_auth.json'
+CONFIG_PATH = ETC_DIR / 'wrapper_config.json'
+MIMO_AUTH_PATH = Path(os.environ.get('MIMOCODE_AUTH_PATH', str(VAR_DIR / 'auth.json')))
+MIMO_LOG_PATH = VAR_DIR / 'mimo.log'
+WRAPPER_LOG_PATH = VAR_DIR / 'wrapper.log'
+MIMO_PID_PATH = VAR_DIR / 'mimo.pid'
+SESSIONS_PATH = VAR_DIR / 'sessions.json'
+DIAG_PATH = VAR_DIR / 'diagnostic_bundle.json'
 
-# Default mirrors
-MIRRORS = {
-    'direct': 'https://github.com',
-    'ghproxy': 'https://ghproxy.com/https://github.com',
-    'ghproxy2': 'https://mirror.ghproxy.com/https://github.com',
-    'custom': '',
+SAFE_TEXT_LIMIT = 160 * 1024
+DEFAULT_CONFIG: Dict[str, Any] = {
+    'auto_restart_mimo': True,
+    'theme': 'dark',
+    'provider_key_visible': False,
+    'native_web_enabled': True,
+    'github_mirror': 'direct',
+    'default_provider': '',
+    'default_model': '',
+    'project_dir': str(Path.home()),
+    'last_session_id': '',
+    'advanced_visible': False,
+    'toolbox_enabled': False,
 }
+OFFICIAL_MODELS = [
+    'mimo/mimo-auto',
+    'xiaomi/mimo-v2-flash',
+    'xiaomi/mimo-v2-omni',
+    'xiaomi/mimo-v2-pro',
+    'xiaomi/mimo-v2.5',
+    'xiaomi/mimo-v2.5-pro',
+    'xiaomi/mimo-v2.5-pro-ultraspeed',
+]
 
-os.makedirs(VAR_DIR, exist_ok=True)
+PROVIDER_PRESETS = [
+    {'id': 'mimo_official', 'name': 'MiMo 官方模型', 'base_url': '', 'model': 'mimo/mimo-auto', 'models': OFFICIAL_MODELS, 'official': True, 'requires_key': False, 'hint': '官方默认/限时免费，推荐首次使用；不需要在这里填写 Base URL 和 API Key。'},
+    {'id': 'openai', 'name': 'OpenAI 兼容', 'base_url': 'https://api.openai.com/v1', 'model': 'gpt-4o-mini', 'hint': '适合所有兼容 OpenAI Chat Completions 的服务。'},
+    {'id': 'deepseek', 'name': 'DeepSeek', 'base_url': 'https://api.deepseek.com/v1', 'model': 'deepseek-chat', 'hint': '国产常用，Key 从 DeepSeek 控制台获取。'},
+    {'id': 'siliconflow', 'name': '硅基流动 SiliconFlow', 'base_url': 'https://api.siliconflow.cn/v1', 'model': 'deepseek-ai/DeepSeek-V3', 'hint': '国内访问友好，模型名以控制台为准。'},
+    {'id': 'kimi', 'name': 'Kimi / Moonshot', 'base_url': 'https://api.moonshot.cn/v1', 'model': 'moonshot-v1-8k', 'hint': '长上下文模型，Key 从 Moonshot 控制台获取。'},
+    {'id': 'custom', 'name': '自定义 OpenAI 兼容', 'base_url': '', 'model': '', 'hint': '填写服务商给你的 Base URL、API Key 和模型名。'},
+]
+
+VAR_DIR.mkdir(parents=True, exist_ok=True)
+ETC_DIR.mkdir(parents=True, exist_ok=True)
 START_TIME = time.time()
 
-# ACP server process (managed by wrapper)
-ACP_PROCESS = {'proc': None, 'port': 5671}
 
-
-# ============================================================
-# helpers
-# ============================================================
-
-def log(msg):
-    """Write to wrapper log with timestamp."""
+def log(msg: str) -> None:
     ts = time.strftime('%Y-%m-%d %H:%M:%S')
-    line = f'[{ts}] {msg}\n'
+    line = f'[{ts}] {msg}'
     try:
-        with open(WRAPPER_LOG_PATH, 'a') as f:
-            f.write(line)
+        with WRAPPER_LOG_PATH.open('a', encoding='utf-8') as f:
+            f.write(line + '\n')
     except Exception:
         pass
-    sys.stderr.write(line)
-
-
-def run_mimo(*args, timeout=30):
-    """Run mimo CLI command and return (stdout, returncode)."""
     try:
-        r = subprocess.run(
-            [MIMO_BIN] + list(args),
-            capture_output=True, text=True, timeout=timeout
-        )
-        return r.stdout.strip(), r.returncode
-    except subprocess.TimeoutExpired:
-        return 'Command timed out', 1
+        sys.stderr.write(line + '\n')
+    except Exception:
+        pass
+
+
+def json_load(path: Path, default: Any) -> Any:
+    try:
+        if not path.exists():
+            return default
+        with path.open('r', encoding='utf-8') as f:
+            return json.load(f)
     except Exception as e:
-        return str(e), 1
+        log(f'json_load failed {path}: {e}')
+        return default
 
 
-def parse_box_stats(text):
-    """Parse box-style stats output into key-value dict."""
-    result = {}
-    for line in text.strip().split('\n'):
-        line = line.strip()
-        if '│' in line:
-            parts = [p.strip() for p in line.split('│')[1:-1]]
-            if len(parts) >= 2 and parts[0] and parts[1]:
-                result[parts[0]] = parts[1]
+def json_save(path: Path, data: Any, mode: int = 0o600) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + '.tmp')
+    with tmp.open('w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+        f.write('\n')
+    os.chmod(tmp, mode)
+    os.replace(tmp, path)
+
+
+def load_config() -> Dict[str, Any]:
+    cfg = DEFAULT_CONFIG.copy()
+    saved = json_load(CONFIG_PATH, {})
+    if isinstance(saved, dict):
+        cfg.update(saved)
+    return cfg
+
+
+def save_config_patch(patch: Dict[str, Any]) -> Dict[str, Any]:
+    cfg = load_config()
+    for k in DEFAULT_CONFIG:
+        if k in patch:
+            cfg[k] = patch[k]
+    json_save(CONFIG_PATH, cfg)
+    return cfg
+
+
+def pbkdf2_hash(password: str, salt: Optional[str] = None) -> Tuple[str, str]:
+    if salt is None:
+        salt = secrets.token_hex(16)
+    dk = hashlib.pbkdf2_hmac('sha256', password.encode('utf-8'), bytes.fromhex(salt), 200_000)
+    return salt, base64.b64encode(dk).decode('ascii')
+
+
+def auth_state() -> Dict[str, Any]:
+    data = json_load(AUTH_PATH, {})
+    if not isinstance(data, dict):
+        data = {}
+    data.setdefault('sessions', {})
+    return data
+
+
+def is_setup() -> bool:
+    data = auth_state()
+    return bool(data.get('password_hash') and data.get('salt'))
+
+
+def verify_password(password: str) -> bool:
+    data = auth_state()
+    salt = data.get('salt')
+    expected = data.get('password_hash')
+    if not salt or not expected:
+        return False
+    _, got = pbkdf2_hash(password, salt)
+    return hmac.compare_digest(got, expected)
+
+
+def create_session() -> str:
+    data = auth_state()
+    token = secrets.token_urlsafe(32)
+    now = int(time.time())
+    data.setdefault('sessions', {})[hashlib.sha256(token.encode()).hexdigest()] = {
+        'created_at': now,
+        'last_seen': now,
+        'expires_at': now + 7 * 24 * 3600,
+    }
+    json_save(AUTH_PATH, data)
+    return token
+
+
+def validate_token(token: str) -> bool:
+    if not token:
+        return False
+    data = auth_state()
+    sessions = data.get('sessions') or {}
+    key = hashlib.sha256(token.encode()).hexdigest()
+    sess = sessions.get(key)
+    now = int(time.time())
+    if not sess or int(sess.get('expires_at', 0)) < now:
+        if key in sessions:
+            sessions.pop(key, None)
+            data['sessions'] = sessions
+            json_save(AUTH_PATH, data)
+        return False
+    sess['last_seen'] = now
+    if now % 20 == 0:
+        data['sessions'] = sessions
+        json_save(AUTH_PATH, data)
+    return True
+
+
+def revoke_token(token: str) -> None:
+    data = auth_state()
+    sessions = data.get('sessions') or {}
+    sessions.pop(hashlib.sha256(token.encode()).hexdigest(), None)
+    data['sessions'] = sessions
+    json_save(AUTH_PATH, data)
+
+
+def make_env() -> Dict[str, str]:
+    env = os.environ.copy()
+    env['HOME'] = '/root'
+    env['MIMOCODE_VAR_DIR'] = str(VAR_DIR)
+    env['MIMOCODE_ETC_DIR'] = str(ETC_DIR)
+    return env
+
+
+def run_cmd(args: List[str], timeout: int = 30, cwd: Optional[str] = None) -> Tuple[int, str, str]:
+    try:
+        r = subprocess.run(args, capture_output=True, text=True, timeout=timeout, env=make_env(), cwd=cwd)
+        return r.returncode, (r.stdout or '').strip(), (r.stderr or '').strip()
+    except subprocess.TimeoutExpired:
+        return 124, '', f'Command timed out after {timeout}s'
+    except Exception as e:
+        return 1, '', str(e)
+
+
+def run_mimo(*args: str, timeout: int = 30, cwd: Optional[str] = None) -> Tuple[int, str, str]:
+    return run_cmd([MIMO_BIN] + list(args), timeout=timeout, cwd=cwd)
+
+
+def port_open(port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.3)
+        return s.connect_ex(('127.0.0.1', port)) == 0
+
+
+def read_pid(path: Path) -> Optional[int]:
+    try:
+        pid = int(path.read_text().strip())
+        os.kill(pid, 0)
+        return pid
+    except Exception:
+        return None
+
+
+def get_mimo_version() -> str:
+    rc, out, err = run_mimo('--version', timeout=8)
+    return (out or err or 'unknown').strip()[:120]
+
+
+def start_mimo_web() -> bool:
+    if port_open(MIMO_PORT):
+        return True
+    if read_pid(MIMO_PID_PATH):
+        return True
+    log(f'starting mimo web on 0.0.0.0:{MIMO_PORT}')
+    try:
+        with MIMO_LOG_PATH.open('ab') as logf:
+            proc = subprocess.Popen(
+                [MIMO_BIN, 'web', '--hostname', '0.0.0.0', '--port', str(MIMO_PORT)],
+                stdout=logf,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+                env=make_env(),
+            )
+        MIMO_PID_PATH.write_text(str(proc.pid))
+        for _ in range(30):
+            if port_open(MIMO_PORT):
+                return True
+            if proc.poll() is not None:
+                log(f'mimo web exited early: rc={proc.returncode}')
+                return False
+            time.sleep(0.4)
+    except Exception as e:
+        log(f'start_mimo_web failed: {e}')
+    return port_open(MIMO_PORT)
+
+
+def stop_mimo_web() -> None:
+    pid = read_pid(MIMO_PID_PATH)
+    if pid:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except Exception:
+            pass
+        for _ in range(10):
+            if not read_pid(MIMO_PID_PATH):
+                break
+            time.sleep(0.2)
+        if read_pid(MIMO_PID_PATH):
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except Exception:
+                pass
+    MIMO_PID_PATH.unlink(missing_ok=True)
+    run_cmd(['pkill', '-f', f'mimo web.*--port {MIMO_PORT}'], timeout=5)
+
+
+def heartbeat() -> None:
+    while True:
+        try:
+            cfg = load_config()
+            if cfg.get('auto_restart_mimo', True) and not port_open(MIMO_PORT):
+                log('heartbeat: mimo web port closed, restarting')
+                start_mimo_web()
+        except Exception as e:
+            log(f'heartbeat error: {e}')
+        time.sleep(20)
+
+
+def mask_secret(value: Any, keep: int = 4) -> str:
+    s = str(value or '')
+    if not s:
+        return ''
+    if len(s) <= keep * 2:
+        return '*' * len(s)
+    return s[:keep] + '...' + s[-keep:]
+
+
+def sanitize_text(text: str, limit: int = SAFE_TEXT_LIMIT) -> str:
+    text = text or ''
+    text = re.sub(r'(sk-[A-Za-z0-9_\-]{12,})', 'sk-***REDACTED***', text)
+    text = re.sub(r'([A-Za-z0-9_\-]{24,}\.[A-Za-z0-9_\-]{12,}\.[A-Za-z0-9_\-]{12,})', '***TOKEN***', text)
+    text = re.sub(r'(?i)(api[_-]?key|token|password|secret)(["\'\s:=]+)([^\s,"\'}]+)', r'\1\2***REDACTED***', text)
+    if len(text) > limit:
+        return text[-limit:]
+    return text
+
+
+def classify_error(text: str, rc: int = 0) -> Dict[str, str]:
+    t = (text or '').lower()
+    if rc == 124 or 'timed out' in t or 'timeout' in t:
+        return {'category': 'timeout', 'title': '执行超时', 'suggestion': '任务耗时过长。请缩短提示词、换更小的项目目录，或稍后再试。'}
+    if 'eaddrinuse' in t or 'address already in use' in t or '端口' in text and '占用' in text:
+        return {'category': 'port_in_use', 'title': '端口被占用', 'suggestion': f'请在设置里重启 MiMo Web，或检查 {MIMO_PORT} 端口占用。'}
+    if 'unauthorized' in t or 'invalid api key' in t or '401' in t or 'api key' in t and 'invalid' in t:
+        return {'category': 'bad_key', 'title': 'API Key 无效或未授权', 'suggestion': '请进入首次配置向导/Provider 设置，确认 API Key、Base URL 和模型名正确。'}
+    if 'provider' in t and ('not' in t or 'missing' in t or '未' in text):
+        return {'category': 'provider_missing', 'title': 'Provider 未配置', 'suggestion': '请先完成首页顶部的 Provider 首次配置向导。'}
+    if 'model' in t and ('not found' in t or 'invalid' in t or '404' in t):
+        return {'category': 'model_unavailable', 'title': '模型不可用', 'suggestion': '请在模型切换里选择服务商支持的模型，或检查模型名拼写。'}
+    if 'network' in t or 'connection refused' in t or 'enotfound' in t or 'eai_again' in t or 'connect' in t:
+        return {'category': 'network', 'title': '网络连接失败', 'suggestion': '请检查 NAS 网络、代理设置、Base URL 是否可访问。'}
+    if not port_open(MIMO_PORT):
+        return {'category': 'mimo_web_down', 'title': 'MiMo Web 未运行', 'suggestion': '请在设置里重启 MiMo Web，或查看日志里的启动错误。'}
+    return {'category': 'unknown', 'title': '执行失败', 'suggestion': '请查看下方“技术细节”，把诊断包发给开发者排查。'}
+
+
+def user_error(text: str, rc: int = 0) -> Dict[str, Any]:
+    clean = sanitize_text(text)
+    info = classify_error(clean, rc)
+    info.update({'raw': clean[-4000:], 'rc': rc})
+    return info
+
+
+def read_tail(path: Path, limit: int = 80_000) -> str:
+    try:
+        if not path.exists():
+            return ''
+        with path.open('rb') as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            f.seek(max(0, size - limit))
+            return f.read().decode('utf-8', 'replace')
+    except Exception as e:
+        return str(e)
+
+
+def read_mimo_auth() -> Dict[str, Any]:
+    data = json_load(MIMO_AUTH_PATH, {})
+    if not isinstance(data, dict):
+        data = {}
+    return data
+
+
+def write_mimo_auth(data: Dict[str, Any]) -> None:
+    json_save(MIMO_AUTH_PATH, data, 0o600)
+
+
+def provider_items(raw: Optional[Dict[str, Any]] = None, reveal: bool = False) -> List[Dict[str, Any]]:
+    data = raw if raw is not None else read_mimo_auth()
+    items: List[Dict[str, Any]] = []
+    if isinstance(data.get('providers'), list):
+        for p in data.get('providers') or []:
+            if isinstance(p, dict):
+                items.append(p)
+    elif isinstance(data.get('credentials'), list):
+        for p in data.get('credentials') or []:
+            if isinstance(p, dict):
+                items.append(p)
+    elif isinstance(data, dict):
+        for k, v in data.items():
+            if isinstance(v, dict) and any(x in v for x in ('apiKey', 'api_key', 'key', 'baseURL', 'base_url')):
+                vv = v.copy(); vv.setdefault('id', k); items.append(vv)
+    result = []
+    for p in items:
+        key = p.get('apiKey') or p.get('api_key') or p.get('key') or p.get('token') or ''
+        base = p.get('baseURL') or p.get('base_url') or p.get('url') or ''
+        name = p.get('name') or p.get('title') or p.get('provider') or p.get('id') or 'Provider'
+        model = p.get('model') or p.get('defaultModel') or p.get('default_model') or ''
+        result.append({
+            'id': p.get('id') or name,
+            'name': name,
+            'base_url': base,
+            'model': model,
+            'api_key': key if reveal else mask_secret(key),
+            'has_key': bool(key),
+        })
     return result
 
 
-def parse_models_verbose(output):
-    """Parse `mimo models --verbose` output into list of model dicts."""
-    models = []
-    current = None
-    brace_depth = 0
-    current_json = ''
-    for line in output.split('\n'):
-        if not line.strip():
-            continue
-        if line.strip().startswith('{'):
-            brace_depth += line.count('{') - line.count('}')
-            current_json += line + '\n'
-            if brace_depth == 0:
-                try:
-                    if current:
-                        current['details'] = json.loads(current_json)
-                        models.append(current)
-                except json.JSONDecodeError:
-                    pass
-                current_json = ''
-                current = None
-        elif brace_depth == 0 and not line.strip().startswith('}'):
-            if current:
-                try:
-                    current['details'] = json.loads(current_json)
-                    models.append(current)
-                except json.JSONDecodeError:
-                    pass
-                current_json = ''
-            current = {'id': line.strip(), 'details': None}
+def save_provider(payload: Dict[str, Any]) -> Dict[str, Any]:
+    provider_id = str(payload.get('id') or payload.get('provider') or 'custom').strip()[:64]
+    name = str(payload.get('name') or provider_id or '自定义 Provider').strip()[:80]
+    base_url = str(payload.get('base_url') or payload.get('baseURL') or '').strip()
+    api_key = str(payload.get('api_key') or payload.get('apiKey') or '').strip()
+    model = str(payload.get('model') or '').strip()
+    official = provider_id == 'mimo_official' or model in OFFICIAL_MODELS
+    if not name:
+        raise ValueError('请填写服务商名称')
+    if official:
+        model = model or 'mimo/mimo-auto'
+        cfg = save_config_patch({'default_provider': 'mimo_official', 'default_model': model})
+        return {'ok': True, 'provider': {'id': 'mimo_official', 'name': 'MiMo 官方模型', 'model': model, 'has_key': False, 'official': True}, 'config': cfg}
+    if not base_url:
+        raise ValueError('请填写接口地址 Base URL')
+    if not api_key:
+        raise ValueError('请填写 API Key')
+    data = read_mimo_auth()
+    providers = data.get('providers') if isinstance(data.get('providers'), list) else []
+    new_item = {'id': provider_id, 'name': name, 'baseURL': base_url, 'apiKey': api_key, 'model': model}
+    replaced = False
+    out = []
+    for p in providers:
+        if isinstance(p, dict) and (p.get('id') == provider_id or p.get('name') == name):
+            out.append(new_item); replaced = True
         else:
-            current_json += line + '\n'
-    if current and current_json:
-        try:
-            current['details'] = json.loads(current_json)
-            models.append(current)
-        except json.JSONDecodeError:
-            pass
-    return models
+            out.append(p)
+    if not replaced:
+        out.append(new_item)
+    data['providers'] = out
+    write_mimo_auth(data)
+    cfg = save_config_patch({'default_provider': provider_id, 'default_model': model})
+    return {'ok': True, 'provider': provider_items({'providers': [new_item]})[0], 'config': cfg}
+
+def delete_provider(pid: str) -> bool:
+    data = read_mimo_auth()
+    providers = data.get('providers') if isinstance(data.get('providers'), list) else []
+    new = [p for p in providers if not (isinstance(p, dict) and str(p.get('id') or p.get('name')) == pid)]
+    data['providers'] = new
+    write_mimo_auth(data)
+    return len(new) != len(providers)
 
 
-def get_mimo_version():
-    """Get current mimo version string."""
-    try:
-        r = subprocess.run([MIMO_BIN, '--version'], capture_output=True, text=True, timeout=10)
-        return r.stdout.strip() or r.stderr.strip() or 'unknown'
-    except Exception:
-        return 'unknown'
-
-
-def get_uptime():
-    """Return wrapper uptime formatted string."""
-    elapsed = int(time.time() - START_TIME)
-    h, m = divmod(elapsed, 3600)
-    m, s = divmod(m, 60)
-    if h > 0:
-        return f'{h}h {m}m {s}s'
-    elif m > 0:
-        return f'{m}m {s}s'
-    return f'{s}s'
-
-
-# ============================================================
-# Status check
-# ============================================================
-
-def get_status():
-    """Check if mimo processes are running and return detailed status."""
-    mimo_web_pid = None
-    mimo_web_running = False
-
-    # Check mimo web process
-    try:
-        r = subprocess.run(['pgrep', '-f', 'mimo web'], capture_output=True, text=True)
-        pids = [p.strip() for p in r.stdout.strip().split('\n') if p.strip()]
-        if pids:
-            mimo_web_running = True
-            mimo_web_pid = pids[0]
-    except Exception:
-        pass
-
-    # Check port listening (more reliable)
-    port_open = False
-    try:
-        r = subprocess.run(['ss', '-tlnp'], capture_output=True, text=True)
-        port_open = f':{MIMO_PORT}' in r.stdout
-    except Exception:
-        pass
-
-    # Check PID file
-    mimo_pid_file = os.path.join(PID_DIR, 'mimo.pid')
-    pid_from_file = None
-    if os.path.exists(mimo_pid_file):
-        try:
-            with open(mimo_pid_file) as f:
-                pid_from_file = f.read().strip()
-        except Exception:
-            pass
-
+def status_payload() -> Dict[str, Any]:
+    cfg = load_config()
+    mimo_open = port_open(MIMO_PORT)
+    providers = provider_items()
+    rc_v, out_v, err_v = run_mimo('--version', timeout=8)
+    cli_ok = rc_v == 0
+    project_dir = cfg.get('project_dir') or str(Path.home())
+    project_ok = Path(project_dir).exists() and Path(project_dir).is_dir()
     return {
-        'mimo_web': mimo_web_running,
-        'mimo_web_pid': mimo_web_pid,
-        'mimo_port_open': port_open,
-        'mimo_pid_file': pid_from_file,
-        'wrapper': True,
-        'wrapper_pid': os.getpid(),
-        'uptime': get_uptime(),
-        'version': get_mimo_version(),
+        'wrapper_version': WRAPPER_VERSION,
+        'mimo_version': (out_v or err_v or '').strip()[:120],
+        'mimo_version_rc': rc_v,
+        'mimo_open': mimo_open,
+        'mimo_port': MIMO_PORT,
+        'wrapper_port': LISTEN_PORT,
+        'uptime_sec': int(time.time() - START_TIME),
+        'providers_count': len(providers),
+        'provider_configured': len(providers) > 0,
+        'default_provider': cfg.get('default_provider', ''),
+        'default_model': cfg.get('default_model', ''),
+        'project_dir': project_dir,
+        'project_ok': project_ok,
+        'cli_ok': cli_ok,
+        'native_web_url': f'http://{socket.gethostname()}:{MIMO_PORT}/',
+        'native_web_embed_url': f'//{socket.gethostname()}:{MIMO_PORT}/',
+        'friendly': {
+            'service': '运行中' if mimo_open else '未运行',
+            'web': '可访问' if mimo_open else '不可访问',
+            'provider': '已配置' if providers else '未配置',
+            'model': cfg.get('default_model') or '未选择',
+            'cli': '可用' if cli_ok else '不可用',
+        }
     }
 
 
-# ============================================================
-# Logging
-# ============================================================
-
-def get_recent_logs(limit=50):
-    """Return recent log lines from unified log."""
-    lines = []
-    try:
-        if os.path.exists(LOG_PATH):
-            with open(LOG_PATH, encoding='utf-8', errors='replace') as f:
-                all_lines = f.readlines()
-                lines = all_lines[-limit:]
-        # Also include wrapper log
-        wrapper_lines = []
-        if os.path.exists(WRAPPER_LOG_PATH):
-            with open(WRAPPER_LOG_PATH, encoding='utf-8', errors='replace') as f:
-                wl = f.readlines()
-                wrapper_lines = [f'[wrapper] {l.strip()}' for l in wl[-limit//2:]]
-        # Merge and sort by timestamp
-        combined = []
-        for l in lines:
-            stripped = l.rstrip('\n')
-            if stripped:
-                combined.append(('mimo', stripped))
-        for l in wrapper_lines:
-            if l.strip():
-                combined.append(('wrapper', l.strip()))
-        # Simple sort by timestamp prefix
-        combined.sort(key=lambda x: x[1][:20] if x[1].startswith('[') else '')
-        return [{'source': s, 'text': t} for s, t in combined[-limit:]]
-    except Exception as e:
-        return [{'source': 'system', 'text': f'Failed to read logs: {e}'}]
+def parse_lines(text: str) -> List[str]:
+    lines = [x.strip() for x in sanitize_text(text, 40_000).splitlines() if x.strip()]
+    return lines[-120:]
 
 
-# ============================================================
-# Upgrade & Mirror support
-# ============================================================
+def smart_logs() -> Dict[str, Any]:
+    raw = '\n'.join([read_tail(WRAPPER_LOG_PATH), read_tail(MIMO_LOG_PATH)])
+    lines = parse_lines(raw)
+    issues = []
+    for line in lines[-80:]:
+        low = line.lower()
+        if any(k in low for k in ['error', 'failed', 'exception', 'unauthorized', 'timeout', 'eaddrinuse', 'invalid']):
+            issues.append({'message': line, **classify_error(line)})
+    return {'issues': issues[-30:], 'raw': sanitize_text(raw[-60_000:])}
 
-def check_latest_version(mirror_key='direct', custom_url=''):
-    """Check GitHub for latest mimo release version.
-    Note: Always uses direct GitHub API regardless of mirror (API not proxied)."""
-    api_url = 'https://api.github.com/repos/XiaomiMiMo/MiMo-Code/releases/latest'
-    
-    try:
-        r = subprocess.run(
-            ['/usr/bin/curl', '-sL', '--connect-timeout', '10', '--max-time', '15',
-             '-H', 'Accept: application/json', api_url],
-            capture_output=True, text=True, timeout=20
-        )
-        if r.returncode != 0:
-            return {'error': f'curl failed: {r.stderr[:200]}'}
-        
-        data = json.loads(r.stdout)
-        tag = data.get('tag_name', '')
-        published = data.get('published_at', '')
-        # Find linux amd64 asset
-        download_url = ''
-        for asset in data.get('assets', []):
-            name = asset.get('name', '')
-            if 'linux' in name.lower() and ('amd64' in name.lower() or 'x86_64' in name.lower()):
-                # Rewrite to use mirror
-                raw_url = asset.get('browser_download_url', '')
-                if mirror_key == 'direct':
-                    download_url = raw_url
-                elif mirror_key == 'custom' and custom_url:
-                    download_url = f'{base_url}/{raw_url.replace("https://github.com/", "")}'
-                else:
-                    download_url = f'{base_url}/{raw_url.replace("https://github.com/", "")}'
-                break
-        
+
+def load_sessions() -> List[Dict[str, Any]]:
+    data = json_load(SESSIONS_PATH, [])
+    return data if isinstance(data, list) else []
+
+
+def save_sessions(items: List[Dict[str, Any]]) -> None:
+    json_save(SESSIONS_PATH, items[-80:])
+
+
+def upsert_session(session_id: str, title: str, message: str, project_dir: str, model: str) -> None:
+    now = int(time.time())
+    items = [x for x in load_sessions() if x.get('id') != session_id]
+    items.append({'id': session_id, 'title': title or message[:28] or '新会话', 'last_message': message[:160], 'project_dir': project_dir, 'model': model, 'updated_at': now})
+    save_sessions(sorted(items, key=lambda x: int(x.get('updated_at', 0))))
+
+
+def validate_project(path: str) -> Tuple[bool, str]:
+    if not path:
+        return False, '请填写项目目录'
+    p = Path(path).expanduser()
+    if not p.exists():
+        return False, f'目录不存在：{p}'
+    if not p.is_dir():
+        return False, f'不是目录：{p}'
+    return True, str(p)
+
+
+def run_chat(payload: Dict[str, Any]) -> Dict[str, Any]:
+    message = str(payload.get('message') or '').strip()
+    if not message:
+        raise ValueError('请输入要发送给 MiMo 的内容')
+    cfg = load_config()
+    project_dir = str(payload.get('project_dir') or cfg.get('project_dir') or str(Path.home()))
+    ok, project_msg = validate_project(project_dir)
+    if not ok:
+        return {'ok': False, 'error': project_msg, **user_error(project_msg, 1)}
+    model = str(payload.get('model') or cfg.get('default_model') or '').strip()
+    session_id = str(payload.get('session_id') or cfg.get('last_session_id') or '').strip()
+    title = str(payload.get('title') or '').strip()
+    args = ['run', '--dir', project_msg]
+    if model:
+        args += ['--model', model]
+    if session_id:
+        args += ['--session', session_id]
+    if title:
+        args += ['--title', title]
+    args.append(message)
+    rc, out, err = run_mimo(*args, timeout=180, cwd=project_msg)
+    raw = out or err
+    if rc != 0:
+        return {'ok': False, 'output': sanitize_text(raw), **user_error(raw, rc)}
+    sid = session_id or hashlib.sha1(f'{time.time()}:{message}'.encode()).hexdigest()[:12]
+    upsert_session(sid, title or message[:30], message, project_msg, model)
+    save_config_patch({'project_dir': project_msg, 'default_model': model, 'last_session_id': sid})
+    clean = sanitize_text(raw, 120_000).strip()
+    if not clean:
         return {
-            'tag': tag,
-            'version': tag.lstrip('v'),
-            'published': published,
-            'download_url': download_url,
-            'current_version': get_mimo_version(),
+            'ok': True,
+            'session_id': sid,
+            'output': '',
+            'empty_output': True,
+            'suggestion': 'MiMo 命令执行成功，但没有返回可显示内容。请先用「测试模型」确认当前模型是否会回复；如果仍为空，查看日志与建议，或在 SSH 中运行复制出来的 CLI 命令定位。',
+            'next_steps': ['点击「测试模型」', '确认模型为 mimo/mimo-auto 或可用第三方模型', '查看「日志与建议」', '复制 CLI 到 SSH 中验证']
         }
-    except json.JSONDecodeError as e:
-        return {'error': f'API response not JSON: {r.stdout[:200]}'}
-    except Exception as e:
-        return {'error': str(e)}
+    return {'ok': True, 'session_id': sid, 'output': clean, 'empty_output': False}
 
 
-def perform_upgrade(download_url, target_version):
-    """Download new binary from URL, replace old one, restart service."""
-    tmp_bin = '/tmp/mimo_new'
-    try:
-        # Download
-        log(f'Downloading v{target_version} from {download_url[:80]}...')
-        r = subprocess.run(
-            ['/usr/bin/curl', '-sL', '--connect-timeout', '15', '--max-time', '120',
-             '-o', tmp_bin, download_url],
-            capture_output=True, text=True, timeout=130
-        )
-        if r.returncode != 0:
-            return {'success': False, 'error': f'Download failed: {r.stderr[:200]}'}
-        
-        # Verify
-        if not os.path.exists(tmp_bin) or os.path.getsize(tmp_bin) < 1024:
-            return {'success': False, 'error': 'Downloaded file too small or missing'}
-        
-        os.chmod(tmp_bin, 0o755)
-        
-        # Verify it's executable
-        r2 = subprocess.run([tmp_bin, '--version'], capture_output=True, text=True, timeout=10)
-        new_ver = (r2.stdout.strip() or r2.stderr.strip() or 'unknown')[:50]
-        log(f'Downloaded binary version: {new_ver}')
-        
-        # Check if currently running and kill
-        subprocess.run(['pkill', '-f', 'mimo web'], capture_output=True, timeout=5)
-        time.sleep(1)
-        
-        # Replace binary
-        target_bin = MIMO_BIN
-        # MIMO_BIN is /usr/local/bin/mimo symlink → resolve to real path
-        if os.path.islink(target_bin):
-            real_path = os.path.realpath(target_bin)
-        else:
-            real_path = '/var/apps/mimocode/target/bin/mimo'
-        
-        shutil.copy2(tmp_bin, real_path)
-        os.chmod(real_path, 0o755)
-        log(f'Binary replaced at {real_path}')
-        
-        # Clean up temp
+def list_models(provider: str = '') -> Dict[str, Any]:
+    if provider in ('mimo_official', 'official', 'mimo'):
+        return {'ok': True, 'models': OFFICIAL_MODELS, 'raw': '\n'.join(OFFICIAL_MODELS), 'official': True}
+    args = ['models'] + ([provider] if provider else [])
+    rc, out, err = run_mimo(*args, timeout=25)
+    raw = out or err
+    models = list(OFFICIAL_MODELS)
+    for line in raw.splitlines():
+        s = re.sub(r'\x1b\[[0-9;]*m', '', line).strip()
+        if not s or s.startswith(('Usage', 'Commands', 'Options')):
+            continue
+        if re.match(r'^[A-Za-z0-9_.:/\-]+$', s) and len(s) > 2:
+            models.append(s)
+    return {'ok': rc == 0, 'models': sorted(set(models))[:200], 'raw': sanitize_text(raw), 'official_models': OFFICIAL_MODELS, **({} if rc == 0 else user_error(raw, rc))}
+
+def check_update() -> Dict[str, Any]:
+    current = get_mimo_version()
+    rc, out, err = run_mimo('upgrade', '--help', timeout=15)
+    return {
+        'ok': True,
+        'current': current,
+        'note': '已按要求禁用自动替换二进制。这里仅展示当前版本和官方升级命令。',
+        'manual_command': 'mimo upgrade',
+        'help': sanitize_text(out or err, 8000),
+        'rc': rc,
+    }
+
+
+def mcp_status() -> Dict[str, Any]:
+    rc, out, err = run_mimo('mcp', 'list', timeout=25)
+    raw = out or err
+    return {'ok': rc == 0, 'raw': sanitize_text(raw), 'friendly': 'MCP 管理默认隐藏在高级设置。当前仅做查看，不执行新增/删除。', **({} if rc == 0 else user_error(raw, rc))}
+
+
+def _safe_project_root() -> Path:
+    cfg = load_config()
+    root = Path(str(cfg.get('project_dir') or Path.home())).expanduser().resolve()
+    if not root.exists() or not root.is_dir():
+        root = Path.home().resolve()
+    return root
+
+
+def _safe_child(path_text: str = '') -> Path:
+    root = _safe_project_root()
+    target = (root / path_text.lstrip('/')).resolve() if path_text else root
+    if root != target and root not in target.parents:
+        raise ValueError('只能访问当前项目目录内的文件')
+    return target
+
+
+def file_browser(path_text: str = '') -> Dict[str, Any]:
+    target = _safe_child(path_text)
+    if target.is_file():
+        if target.stat().st_size > 256 * 1024:
+            return {'ok': False, 'error': '文件超过 256KB，仅支持小文本预览', 'path': str(target)}
+        raw = target.read_bytes()
         try:
-            os.remove(tmp_bin)
+            text = raw.decode('utf-8')
+        except UnicodeDecodeError:
+            text = raw.decode('utf-8', 'replace')
+        return {'ok': True, 'type': 'file', 'path': str(target), 'text': sanitize_text(text, 256 * 1024), 'size': len(raw)}
+    if not target.is_dir():
+        return {'ok': False, 'error': '路径不存在或不是目录'}
+    entries = []
+    for item in sorted(target.iterdir(), key=lambda x: (not x.is_dir(), x.name.lower()))[:200]:
+        try:
+            st = item.stat()
+            entries.append({'name': item.name, 'path': str(item.relative_to(_safe_project_root())), 'type': 'dir' if item.is_dir() else 'file', 'size': st.st_size, 'mtime': int(st.st_mtime)})
         except Exception:
-            pass
-        
-        # Restart mimo web
-        _start_mimo_web()
-        
-        return {
-            'success': True,
-            'version': target_version,
-            'new_version': new_ver,
-            'message': f'升级到 v{target_version} 成功！服务已重启。',
-        }
-    except subprocess.TimeoutExpired:
-        return {'success': False, 'error': 'Download timed out (120s)'}
-    except Exception as e:
-        return {'success': False, 'error': str(e)}
+            continue
+    return {'ok': True, 'type': 'dir', 'root': str(_safe_project_root()), 'path': str(target), 'entries': entries, 'readonly': True}
 
 
-def _start_mimo_web():
-    """Start mimo web process in background."""
-    try:
-        mimo_pid_file = os.path.join(PID_DIR, 'mimo.pid')
-        env = os.environ.copy()
-        env['MIMOCODE_PORT'] = str(MIMO_PORT)
-        proc = subprocess.Popen(
-            [MIMO_BIN, 'web', '--port', str(MIMO_PORT), '--pure'],
-            stdout=open(LOG_PATH, 'a'), stderr=subprocess.STDOUT,
-            env=env, start_new_session=True
-        )
-        with open(mimo_pid_file, 'w') as f:
-            f.write(str(proc.pid))
-        log(f'mimo web started (PID {proc.pid}, port {MIMO_PORT})')
-        return True
-    except Exception as e:
-        log(f'Failed to start mimo web: {e}')
-        return False
+def process_metrics() -> Dict[str, Any]:
+    pids = []
+    pid = read_pid(MIMO_PID_PATH)
+    if pid:
+        pids.append(pid)
+    wrapper_pid = os.getpid()
+    rows = []
+    for p in [wrapper_pid] + pids:
+        rc, out, err = run_cmd(['ps', '-p', str(p), '-o', 'pid,comm,%cpu,%mem,rss,etime,args', '--no-headers'], timeout=5)
+        if rc == 0 and out.strip():
+            rows.append(out.strip())
+    return {'ok': True, 'uptime_sec': int(time.time() - START_TIME), 'wrapper_pid': wrapper_pid, 'mimo_pid': pid, 'mimo_port_open': port_open(MIMO_PORT), 'processes': rows, 'note': '轻量运行状态，仅用于判断 MiMo 是否正常运行。'}
 
 
-# ============================================================
-# fnOS DB status sync
-# ============================================================
-
-def sync_db_status():
-    """Sync appcenter DB status to 'running'.
-    Retries up to 30s because during install_callback the app record
-    hasn't been created yet.
-    """
-    app_name = 'mimocode'
-    for i in range(10):
-        try:
-            r = subprocess.run(
-                ['sudo', '-u', 'postgres', 'psql', '-d', 'appcenter',
-                 '-c', f"UPDATE app SET status='running' WHERE app_name='{app_name}';"],
-                capture_output=True, text=True, timeout=5
-            )
-            if 'UPDATE 1' in r.stdout:
-                log(f'DB status synced to running (attempt {i+1})')
-                return True
-            elif i == 0:
-                log('DB record not ready yet, will retry...')
-        except Exception as e:
-            if i == 0:
-                log(f'DB sync attempt failed: {e}')
-        time.sleep(3)
-    log('WARN: DB status sync failed after 10 attempts')
-    return False
+def acp_status() -> Dict[str, Any]:
+    rc, out, err = run_mimo('acp', '--help', timeout=15)
+    return {'ok': True, 'available': rc == 0, 'help': sanitize_text(out or err, 12000), 'friendly': 'ACP 服务默认关闭，仅在外部编辑器/客户端接入时使用。'}
 
 
-# ============================================================
-# Heartbeat monitor with auto-restart
-# ============================================================
-
-def heartbeat_monitor():
-    """Monitor mimo web process every 30s; auto-restart if crashed."""
-    consecutive_failures = 0
-    while True:
-        time.sleep(30)
-        try:
-            r = subprocess.run(['pgrep', '-f', 'mimo web'], capture_output=True, text=True)
-            is_running = bool(r.stdout.strip())
-            # Also check port
-            port_r = subprocess.run(['ss', '-tlnp'], capture_output=True, text=True)
-            port_open = f':{MIMO_PORT}' in port_r.stdout
-
-            if is_running and port_open:
-                consecutive_failures = 0
-            elif not is_running and not port_open:
-                consecutive_failures += 1
-                log(f'mimo web not running (failure #{consecutive_failures}), attempting restart...')
-                if _start_mimo_web():
-                    consecutive_failures = 0
-                    log('Auto-restart successful')
-                else:
-                    log('Auto-restart failed, will retry')
-            else:
-                # One of them is OK, probably starting/stopping
-                consecutive_failures = 0
-        except Exception as e:
-            log(f'Heartbeat check error: {e}')
+def acp_control(action: str) -> Dict[str, Any]:
+    if action not in ('status', 'start', 'stop', 'restart'):
+        raise ValueError('ACP 只允许 status/start/stop/restart')
+    if action == 'status':
+        return acp_status()
+    return {'ok': False, 'error': 'v0.10.0 仅提供 ACP 状态查看；启停需要确认具体端口和官方命令后再开放。', 'suggestion': '请先使用状态页确认 MiMo 当前 ACP 支持参数。'}
 
 
-# ============================================================
-# Config persistence
-# ============================================================
-
-def load_config():
-    """Load wrapper config from file."""
-    try:
-        if os.path.exists(CONFIG_PATH):
-            with open(CONFIG_PATH, encoding='utf-8') as f:
-                return json.load(f)
-    except Exception:
-        pass
-    return {}
+def agent_config() -> Dict[str, Any]:
+    rc, out, err = run_mimo('agent', 'list', timeout=20)
+    return {'ok': rc == 0, 'raw': sanitize_text(out or err, 16000), 'readonly': True, 'friendly': 'Agent 权限默认只读展示；导入配置前会自动备份。', **({} if rc == 0 else user_error(out or err, rc))}
 
 
-def save_config(config):
-    """Save wrapper config to file."""
-    try:
-        os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
-        with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
-            json.dump(config, f, indent=2, ensure_ascii=False)
-        return True
-    except Exception as e:
-        log(f'Config save failed: {e}')
-        return False
+def agent_import(payload: Dict[str, Any]) -> Dict[str, Any]:
+    if payload.get('confirm') != 'EDIT_AGENT':
+        raise ValueError('导入 Agent 配置需要 confirm=EDIT_AGENT')
+    backup = VAR_DIR / f'agent-config-backup-{int(time.time())}.json'
+    json_save(backup, {'exported_at': int(time.time()), 'note': 'v0.10.0 自动备份占位；实际 Agent 配置由官方 mimo 管理', 'current': agent_config()}, 0o600)
+    return {'ok': False, 'backup': str(backup), 'error': 'v0.10.0 暂不直接写 Agent 权限，已生成备份占位。', 'suggestion': '为避免破坏官方配置，本版本只读展示 Agent 权限。'}
 
 
-# ============================================================
-# Auth / Provider helpers
-# ============================================================
-
-def _read_auth():
-    """Read auth.json and return list of providers."""
-    try:
-        if os.path.exists(AUTH_PATH):
-            with open(AUTH_PATH, encoding='utf-8') as f:
-                data = json.load(f)
-                if isinstance(data, list):
-                    return data
-        return []
-    except Exception:
-        return []
+ALLOWED_MIMO_COMMANDS = {
+    'models': ['models'],
+    'providers list': ['providers', 'list'],
+    'mcp list': ['mcp', 'list'],
+    'debug': ['debug'],
+    'version': ['--version'],
+}
 
 
-def _write_auth(providers):
-    """Write provider list to auth.json."""
-    os.makedirs(os.path.dirname(AUTH_PATH), exist_ok=True)
-    with open(AUTH_PATH, 'w', encoding='utf-8') as f:
-        json.dump(providers, f, indent=2, ensure_ascii=False)
-
-
-# ============================================================
-# API router
-# ============================================================
-
-class APIHandler(http.server.SimpleHTTPRequestHandler):
-    """HTTP request handler with JSON API routing.
-    Static files are served from PUBLIC_DIR; no directory listing.
-    """
-
-    def translate_path(self, path):
-        """Map URL paths to PUBLIC_DIR files."""
-        path = path.split('?', 1)[0].split('#', 1)[0]
-        if path.startswith('/api/'):
-            return super().translate_path(path)  # won't be used (handled by do_GET)
-        relative = path.lstrip('/')
-        if not relative:
-            relative = 'index.html'
-        result = os.path.join(PUBLIC_DIR, relative)
-        # Guard against directory listing
-        if os.path.isdir(result):
-            return os.path.join(result, 'index.html')
-        return result
-
-    def list_directory(self, path):
-        """Disable directory listing — return 404."""
-        self.send_error(404, 'Not found')
-        return None
-
-    def do_GET(self):
-        parsed = urllib.parse.urlparse(self.path)
-        path = parsed.path
-        params = urllib.parse.parse_qs(parsed.query)
-
-        try:
-            if path == '/api/status':
-                self._json_response(self._handle_status())
-            elif path == '/api/providers':
-                self._json_response(self._handle_list_providers())
-            elif path == '/api/sessions':
-                self._json_response(self._handle_list_sessions(params))
-            elif path.startswith('/api/sessions/') and path.endswith('/export'):
-                sid = path.split('/')[3]
-                self._json_response(self._handle_session_export(sid))
-            elif path.startswith('/api/sessions/'):
-                sid = path.split('/')[3]
-                self._json_response(self._handle_get_session(sid))
-            elif path == '/api/stats':
-                self._json_response(self._handle_stats())
-            elif path == '/api/models':
-                self._json_response(self._handle_models())
-            elif path == '/api/config':
-                self._json_response(self._handle_get_config())
-            elif path == '/api/logs':
-                limit = int(params.get('limit', [50])[0])
-                self._json_response({'logs': get_recent_logs(limit)})
-            elif path == '/api/check-update':
-                mirror = params.get('mirror', ['direct'])[0]
-                custom = params.get('custom_url', [''])[0]
-                self._json_response(check_latest_version(mirror, custom))
-            elif path == '/api/upgrade/status':
-                # Return current upgrade status
-                self._json_response({
-                    'current_version': get_mimo_version(),
-                    'last_check': None,
-                    'downloading': False,
-                })
-            elif path.startswith('/api/upgrade/download-url'):
-                # Generate download URL for a given mirror + version
-                version = params.get('version', [''])[0]
-                mirror = params.get('mirror', ['direct'])[0]
-                custom = params.get('custom_url', [''])[0]
-                if not version:
-                    self._json_response({'error': 'version required'})
-                    return
-                base_url = MIRRORS.get(mirror, 'direct')
-                if mirror == 'custom' and custom:
-                    base_url = custom.rstrip('/')
-                gh_path = f'XiaomiMiMo/MiMo-Code/releases/download/v{version}/mimo-linux-amd64'
-                if mirror == 'direct':
-                    url = f'{base_url}/{gh_path}'
-                elif mirror == 'custom':
-                    url = f'{base_url}/{gh_path}'
-                else:
-                    url = f'{base_url}/{gh_path}'
-                self._json_response({'download_url': url, 'version': version})
-            elif path.startswith('/api/providers/test/'):
-                provider_id = path.split('/')[4]
-                self._json_response(self._handle_test_provider(provider_id))
-            elif path == '/api/agents':
-                self._json_response(self._handle_agents())
-            elif path == '/api/mcp':
-                self._json_response(self._handle_mcp())
-            elif path == '/api/acp/status':
-                self._json_response(self._handle_acp_status())
-            elif path == '/api/debug':
-                section = params.get('section', ['all'])[0]
-                self._json_response(self._handle_debug(section))
-            else:
-                # Static files
-                super().do_GET()
-        except Exception as e:
-            self._json_response({'error': str(e)}, 500)
-
-    def do_POST(self):
-        parsed = urllib.parse.urlparse(self.path)
-        path = parsed.path
-        try:
-            length = int(self.headers.get('Content-Length', 0))
-            body = self.rfile.read(length).decode('utf-8') if length else '{}'
-            data = json.loads(body) if body else {}
-        except Exception:
-            data = {}
-
-        try:
-            if path == '/api/providers/add':
-                self._json_response(self._handle_add_provider(data))
-            elif path == '/api/providers/remove':
-                self._json_response(self._handle_remove_provider(data))
-            elif path == '/api/sessions/delete':
-                self._json_response(self._handle_delete_session(data))
-            elif path == '/api/config/save':
-                self._json_response(self._handle_save_config(data))
-            elif path == '/api/upgrade/do':
-                self._json_response(self._handle_upgrade(data))
-            elif path == '/api/chat':
-                self._json_response(self._handle_chat(data))
-            elif path == '/api/agents/create':
-                self._json_response(self._handle_agent_create(data))
-            elif path == '/api/mcp/add':
-                self._json_response(self._handle_mcp_add(data))
-            elif path == '/api/acp/toggle':
-                self._json_response(self._handle_acp_toggle(data))
-            elif path == '/api/restart':
-                # Restart the mimo web service
-                subprocess.run(['pkill', '-f', 'mimo web'], capture_output=True, timeout=5)
-                time.sleep(1)
-                ok = _start_mimo_web()
-                self._json_response({'success': ok, 'message': '服务已重启' if ok else '重启失败'})
-            else:
-                self._json_response({'error': 'Not found'}, 404)
-        except Exception as e:
-            self._json_response({'error': str(e)}, 500)
-
-    # ==========================================================
-    # Handler implementations
-    # ==========================================================
-
-    def _handle_status(self):
-        s = get_status()
-        # Get config for mirror info
-        cfg = load_config()
-        s['mirror'] = cfg.get('mirror', 'direct')
-        s['mirror_custom_url'] = cfg.get('mirror_custom_url', '')
-        s['dark_mode'] = cfg.get('dark_mode', True)
-        # Models count
-        models_out, _ = run_mimo('models', timeout=15)
-        model_count = len([l for l in models_out.strip().split('\n') if l.strip() and '│' not in l])
-        s['models_count'] = model_count
-        return s
-
-    def _handle_list_providers(self):
-        providers = _read_auth()
-        return {'providers': providers}
-
-    def _handle_add_provider(self, data):
-        providers = _read_auth()
-        api_key = (data.get('api_key') or '').strip()
-        if not api_key:
-            return {'success': False, 'error': 'API Key 不能为空'}
-        new_entry = {'id': data.get('provider', 'openai'), 'key': api_key}
-        if data.get('base_url'):
-            new_entry['url'] = data['base_url'].strip().rstrip('/')
-        # Check for duplicate
-        for i, p in enumerate(providers):
-            if p.get('id') == new_entry['id']:
-                providers[i] = new_entry
-                _write_auth(providers)
-                return {'success': True, 'message': f'已更新 Provider: {new_entry["id"]}'}
-        providers.append(new_entry)
-        _write_auth(providers)
-        return {'success': True, 'message': f'已添加 Provider: {new_entry["id"]}'}
-
-    def _handle_remove_provider(self, data):
-        providers = _read_auth()
-        provider_id = data.get('provider', '').strip()
-        providers = [p for p in providers if p.get('id') != provider_id]
-        _write_auth(providers)
-        return {'success': True, 'message': f'已删除 Provider: {provider_id}'}
-
-    def _handle_test_provider(self, provider_id):
-        """Test provider connectivity by listing models."""
-        providers = _read_auth()
-        provider = next((p for p in providers if p.get('id') == provider_id), None)
-        if not provider:
-            return {'success': False, 'error': f'Provider {provider_id} 未找到'}
-        # Set env and run a quick model list
-        env = os.environ.copy()
-        if provider.get('key'):
-            env[provider['id'].upper() + '_API_KEY'] = provider['key']
-        if provider.get('url'):
-            env[provider['id'].upper() + '_BASE_URL'] = provider['url']
-        try:
-            start = time.time()
-            r = subprocess.run(
-                [MIMO_BIN, 'models', provider_id],
-                capture_output=True, text=True, timeout=20, env=env
-            )
-            elapsed = time.time() - start
-            if r.returncode == 0 and r.stdout.strip():
-                return {'success': True, 'message': f'连接成功！({elapsed:.1f}s)', 'elapsed': round(elapsed, 1)}
-            else:
-                err = r.stderr.strip()[:200] or '无响应'
-                return {'success': False, 'error': err, 'elapsed': round(elapsed, 1)}
-        except subprocess.TimeoutExpired:
-            return {'success': False, 'error': '连接超时(20s)'}
-        except Exception as e:
-            return {'success': False, 'error': str(e)}
-
-    def _handle_list_sessions(self, params):
-        limit = params.get('limit', ['50'])[0]
-        out, _ = run_mimo('ls', '--limit', limit, timeout=15)
-        sessions = []
-        for line in out.strip().split('\n')[1:]:
-            parts = [p.strip() for p in line.split('│') if p.strip()]
-            if len(parts) >= 3:
-                sessions.append({
-                    'id': parts[1] if len(parts) > 1 else parts[0],
-                    'name': parts[0],
-                    'model': parts[2] if len(parts) > 2 else '',
-                    'created': parts[3] if len(parts) > 3 else '',
-                })
-        return {'sessions': sessions}
-
-    def _handle_get_session(self, sid):
-        out, _ = run_mimo('ls')
-        for line in out.strip().split('\n')[1:]:
-            parts = [p.strip() for p in line.split('│') if p.strip()]
-            if len(parts) >= 2 and parts[1] == sid:
-                return {'session': {'id': sid, 'name': parts[0]}}
-        return {'session': None}
-
-    def _handle_session_export(self, sid):
-        out, rc = run_mimo('export', sid, timeout=30)
-        if rc != 0:
-            return {'success': False, 'error': out[:500]}
-        try:
-            data = json.loads(out)
-            return {'success': True, 'data': data}
-        except json.JSONDecodeError:
-            return {'success': True, 'data': out}
-
-    def _handle_delete_session(self, data):
-        sid = data.get('session_id', '')
-        out, rc = run_mimo('delete', sid, timeout=15)
-        return {'success': rc == 0, 'message': '已删除' if rc == 0 else out[:200]}
-
-    def _handle_stats(self):
-        out, rc = run_mimo('stats', timeout=15)
-        stats = parse_box_stats(out) if rc == 0 else {}
-        return {'stats': stats}
-
-    def _handle_models(self):
-        out, rc = run_mimo('models', '--verbose', timeout=30)
-        models = parse_models_verbose(out) if rc == 0 else []
-        return {'models': models}
-
-    def _handle_get_config(self):
-        cfg = load_config()
-        return {
-            'config': cfg,
-            'mirrors': MIRRORS,
-        }
-
-    def _handle_save_config(self, data):
-        current = load_config()
-        for key in ('mirror', 'mirror_custom_url', 'dark_mode', 'log_limit'):
-            if key in data:
-                current[key] = data[key]
-        ok = save_config(current)
-        return {'success': ok, 'message': '设置已保存' if ok else '保存失败'}
-
-    def _handle_upgrade(self, data):
-        download_url = data.get('download_url', '')
-        version = data.get('version', '')
-        if not download_url or not version:
-            return {'success': False, 'error': '缺少下载地址或版本号'}
-        # Run upgrade in background thread to avoid timeout
-        result = perform_upgrade(download_url, version)
-        return result
-
-    def _handle_chat(self, data):
-        message = data.get('message', '').strip()
+def mimo_command(payload: Dict[str, Any]) -> Dict[str, Any]:
+    key = str(payload.get('command') or '').strip()
+    message = str(payload.get('message') or '').strip()
+    if key == 'run':
         if not message:
-            return {'success': False, 'error': '消息不能为空'}
-        session_id = data.get('session_id', '')
-        provider = data.get('provider', '')
-        args = ['run', message]
-        if session_id:
-            args = ['run', '--session', session_id, message]
-        out, rc = run_mimo(*args, timeout=120)
-        return {'success': rc == 0, 'response': out, 'returncode': rc}
+            raise ValueError('mimo run 需要输入消息')
+        return run_chat({'message': message, 'model': payload.get('model') or load_config().get('default_model') or 'mimo/mimo-auto', 'project_dir': payload.get('project_dir') or load_config().get('project_dir')})
+    if key == 'models':
+        return {'ok': True, 'command': 'mimo models', 'output': '\n'.join(OFFICIAL_MODELS), 'models': OFFICIAL_MODELS}
+    args = ALLOWED_MIMO_COMMANDS.get(key)
+    if not args:
+        raise ValueError('只允许执行白名单内的 MiMo 命令')
+    rc, out, err = run_mimo(*args, timeout=60)
+    raw = out or err
+    return {'ok': rc == 0, 'command': 'mimo ' + ' '.join(args), 'output': sanitize_text(raw, 80000), **({} if rc == 0 else user_error(raw, rc))}
 
-    # ==========================================================
-    # Agent Management
-    # ==========================================================
-    def _handle_agents(self):
-        """List all agents with their permission details."""
-        out, rc = run_mimo('agent', 'list', timeout=15)
-        if rc != 0:
-            return {'error': out, 'agents': []}
 
-        agents = []
-        current = None
-        json_lines = []
-        in_json = False
+def export_config(include_keys: bool = False) -> Dict[str, Any]:
+    data = {
+        'wrapper_version': WRAPPER_VERSION,
+        'exported_at': int(time.time()),
+        'config': load_config(),
+        'providers': provider_items(reveal=include_keys),
+        'include_keys': include_keys,
+    }
+    return data
 
-        for line in out.split('\n'):
-            stripped = line.strip()
-            if not stripped:
-                continue
-            # Agent header line like "build (primary)" or with indentation
-            if '(' in stripped and stripped.endswith(')') and not stripped.startswith('['):
-                if current:
-                    # Try to parse accumulated JSON
-                    if json_lines:
-                        try:
-                            current['permissions'] = json.loads(''.join(json_lines))
-                        except:
-                            current['raw_permissions'] = ''.join(json_lines)
-                        json_lines = []
-                    agents.append(current)
-                    in_json = False
-                name_part = stripped[:stripped.index('(')].strip()
-                type_part = stripped[stripped.index('(')+1:stripped.index(')')]
-                current = {'name': name_part, 'type': type_part, 'permissions': []}
-                in_json = False
-            elif stripped.startswith('[') or stripped.startswith('{'):
-                in_json = True
-                json_lines.append(stripped)
-            elif in_json:
-                json_lines.append(stripped)
 
-        # Don't forget the last agent
-        if current:
-            if json_lines:
-                try:
-                    current['permissions'] = json.loads(''.join(json_lines))
-                except:
-                    current['raw_permissions'] = ''.join(json_lines)
-            agents.append(current)
+def import_config(payload: Dict[str, Any]) -> Dict[str, Any]:
+    if payload.get('confirm') != 'IMPORT_CONFIG':
+        raise ValueError('导入配置需要 confirm=IMPORT_CONFIG')
+    cfg = payload.get('config') if isinstance(payload.get('config'), dict) else {}
+    save_config_patch(cfg)
+    providers = payload.get('providers')
+    imported = 0
+    if isinstance(providers, list):
+        for p in providers:
+            if isinstance(p, dict) and (p.get('api_key') or p.get('apiKey')):
+                save_provider(p)
+                imported += 1
+    return {'ok': True, 'imported_providers': imported, 'config': load_config()}
 
-        return {'agents': agents, 'count': len(agents)}
 
-    def _handle_agent_create(self, data):
-        """Create a new agent."""
-        args = ['agent', 'create']
-        path_val = data.get('name', '').strip()
-        if path_val:
-            args.extend(['--path', path_val])
-        desc = data.get('description', '').strip()
-        if desc:
-            args.extend(['--description', desc])
-        mode = data.get('mode', '').strip()
-        if mode in ('all', 'primary', 'subagent'):
-            args.extend(['--mode', mode])
-        tools = data.get('tools', '').strip()
-        if tools:
-            args.extend(['--tools', tools])
-        model = data.get('model', '').strip()
-        if model:
-            args.extend(['-m', model])
-        out, rc = run_mimo(*args, timeout=60)
-        return {'output': out, 'success': rc == 0}
-
-    # ==========================================================
-    # MCP Management
-    # ==========================================================
-    def _handle_mcp(self):
-        """List MCP servers."""
-        out, rc = run_mimo('mcp', 'ls', timeout=15)
-        # Parse box-style output for named entries
-        servers = []
-        for line in out.split('\n'):
-            stripped = line.strip()
-            if '│' in stripped:
-                parts = [p.strip() for p in stripped.split('│')[1:-1]]
-                for p in parts:
-                    if p and p != 'MCP Servers' and not p.startswith('MCP') and not p.startswith('No') and not p.startswith('Add'):
-                        if p.startswith('•') or p.startswith('-'):
-                            servers.append({'name': p.lstrip('•-').strip()})
-        return {'servers': servers, 'count': len(servers), 'raw': out}
-
-    def _handle_mcp_add(self, data):
-        """Add an MCP server."""
-        url = data.get('url', '').strip()
-        name = data.get('name', '').strip()
-        args = ['mcp', 'add', name]
-        if url:
-            args.extend(['--url', url])
-        out, rc = run_mimo(*args, timeout=30)
-        return {'output': out, 'success': rc == 0}
-
-    # ==========================================================
-    # ACP Server
-    # ==========================================================
-    def _handle_acp_status(self):
-        """Get ACP server process status."""
-        global ACP_PROCESS
-        proc = ACP_PROCESS.get('proc')
-        running = proc is not None and proc.poll() is None
-        if not running:
-            ACP_PROCESS['proc'] = None
-        return {
-            'running': running,
-            'pid': proc.pid if (running and proc) else None,
-            'port': ACP_PROCESS.get('port', 5671),
+def diagnostic_bundle() -> Dict[str, Any]:
+    bundle = {
+        'generated_at': int(time.time()),
+        'wrapper_version': WRAPPER_VERSION,
+        'status': status_payload(),
+        'config': {k: ('***REDACTED***' if 'key' in k.lower() or 'token' in k.lower() else v) for k, v in load_config().items()},
+        'providers': provider_items(reveal=False),
+        'logs': smart_logs()['issues'],
+        'paths': {
+            'mimo_bin': {'path': MIMO_BIN, 'exists': Path(MIMO_BIN).exists()},
+            'public': {'path': str(PUBLIC_DIR), 'exists': PUBLIC_DIR.exists()},
+            'auth': {'path': str(MIMO_AUTH_PATH), 'exists': MIMO_AUTH_PATH.exists()},
+            'config': {'path': str(CONFIG_PATH), 'exists': CONFIG_PATH.exists()},
         }
+    }
+    json_save(DIAG_PATH, bundle, 0o600)
+    return {'ok': True, 'bundle': bundle, 'path': str(DIAG_PATH)}
 
-    def _handle_acp_toggle(self, data):
-        """Start or stop the ACP server."""
-        global ACP_PROCESS
-        action = data.get('action', 'start')
-        acp_port = data.get('port', 5671)
 
-        if action == 'start':
-            proc = ACP_PROCESS.get('proc')
-            if proc is not None and proc.poll() is None:
-                return {'running': True, 'pid': proc.pid, 'port': ACP_PROCESS.get('port'), 'message': 'ACP 已经在运行'}
-            try:
-                acp_log = open(os.path.join(VAR_DIR, 'acp.log'), 'a')
-                proc = subprocess.Popen(
-                    [MIMO_BIN, 'acp', '--port', str(acp_port), '--hostname', '0.0.0.0'],
-                    stdout=acp_log, stderr=subprocess.STDOUT,
-                    stdin=subprocess.DEVNULL
-                )
-                ACP_PROCESS['proc'] = proc
-                ACP_PROCESS['port'] = acp_port
-                log(f'ACP server started on port {acp_port} (PID {proc.pid})')
-                return {'running': True, 'pid': proc.pid, 'port': acp_port, 'message': 'ACP 已启动'}
-            except Exception as e:
-                return {'running': False, 'error': str(e)}
-        else:
-            proc = ACP_PROCESS.get('proc')
-            if proc and proc.poll() is None:
-                proc.terminate()
-                try:
-                    proc.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-                    proc.wait(timeout=3)
-                log('ACP server stopped')
-            ACP_PROCESS['proc'] = None
-            return {'running': False, 'message': 'ACP 已停止'}
+def cli_commands() -> Dict[str, Any]:
+    cfg = load_config()
+    p = cfg.get('project_dir') or '/path/to/project'
+    model = cfg.get('default_model') or '<模型名>'
+    return {'commands': [
+        {'title': '进入 MiMo 终端界面', 'cmd': 'mimo'},
+        {'title': '在当前项目提问', 'cmd': f'cd {sh_quote(p)} && mimo run "分析这个项目结构"'},
+        {'title': '指定模型执行', 'cmd': f'cd {sh_quote(p)} && mimo run --model {sh_quote(model)} "帮我解释这个报错"'},
+        {'title': '启动原生 Web', 'cmd': f'mimo web --hostname 0.0.0.0 --port {MIMO_PORT}'},
+    ]}
 
-    # ==========================================================
-    # Debug Panel
-    # ==========================================================
-    def _handle_debug(self, section='all'):
-        """Gather debug information."""
-        result = {}
 
-        if section in ('all', 'config'):
-            out, rc = run_mimo('debug', 'config', timeout=10)
-            result['config'] = out[:3000]
-        if section in ('all', 'paths'):
-            out, rc = run_mimo('debug', 'paths', timeout=10)
-            result['paths'] = out[:3000]
-        if section in ('all', 'skills'):
-            out, rc = run_mimo('debug', 'skill', timeout=15)
-            result['skills'] = out[:5000]
-        if section in ('all', 'scrap'):
-            out, rc = run_mimo('debug', 'scrap', timeout=10)
-            result['scrap'] = out[:3000]
-        if section in ('all', 'agent'):
-            out, rc = run_mimo('debug', 'agent', 'primary', timeout=10)
-            result['agent_primary'] = out[:3000]
-            result['wrapper_version'] = '0.6.0'
-            result['listening_port'] = LISTEN_PORT
-            result['var_dir'] = VAR_DIR
-            result['uptime'] = int(time.time() - START_TIME)
+def sh_quote(s: str) -> str:
+    return "'" + str(s).replace("'", "'\''") + "'"
 
-        return result
 
-    def _json_response(self, data, status=200):
-        body = json.dumps(data, ensure_ascii=False, default=str).encode('utf-8')
+class Handler(http.server.SimpleHTTPRequestHandler):
+    server_version = f'MiMoWrapper/{WRAPPER_VERSION}'
+
+    def log_message(self, fmt: str, *args: Any) -> None:
+        log('%s %s' % (self.client_address[0], fmt % args))
+
+    def translate_path(self, path: str) -> str:
+        rel = urllib.parse.urlparse(path).path.lstrip('/') or 'index.html'
+        return str((PUBLIC_DIR / rel).resolve())
+
+    def _send_json(self, data: Any, status: int = 200) -> None:
+        body = json.dumps(data, ensure_ascii=False).encode('utf-8')
         self.send_response(status)
         self.send_header('Content-Type', 'application/json; charset=utf-8')
-        self.send_header('Access-Control-Allow-Origin', '*')
         self.send_header('Cache-Control', 'no-store')
+        self.send_header('Content-Length', str(len(body)))
         self.end_headers()
         self.wfile.write(body)
 
-    # Suppress default logging
-    def log_message(self, fmt, *args):
+    def _read_json(self) -> Dict[str, Any]:
+        n = int(self.headers.get('Content-Length') or '0')
+        if n <= 0:
+            return {}
+        raw = self.rfile.read(min(n, 2 * 1024 * 1024)).decode('utf-8', 'replace')
+        return json.loads(raw or '{}')
+
+    def _token(self) -> str:
+        auth = self.headers.get('Authorization') or ''
+        if auth.lower().startswith('bearer '):
+            return auth.split(' ', 1)[1].strip()
+        return ''
+
+    def _require_auth(self) -> bool:
+        if not validate_token(self._token()):
+            self._send_json({'error': '未登录或登录已过期', 'suggestion': '请重新登录。'}, 401)
+            return False
+        return True
+
+    def do_GET(self) -> None:
+        path = urllib.parse.urlparse(self.path).path
+        try:
+            if path == '/api/auth/status':
+                return self._send_json({'setup': is_setup(), 'wrapper_version': WRAPPER_VERSION})
+            if not path.startswith('/api/'):
+                return super().do_GET()
+            if not self._require_auth():
+                return
+            qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            if path == '/api/status':
+                return self._send_json(status_payload())
+            if path == '/api/providers':
+                return self._send_json({'providers': provider_items(), 'presets': PROVIDER_PRESETS, 'config': load_config()})
+            if path == '/api/models':
+                provider = (qs.get('provider') or [''])[0]
+                return self._send_json(list_models(provider))
+            if path == '/api/sessions':
+                return self._send_json({'sessions': sorted(load_sessions(), key=lambda x: int(x.get('updated_at', 0)), reverse=True)})
+            if path == '/api/logs':
+                return self._send_json(smart_logs())
+            if path == '/api/diagnostic':
+                return self._send_json(diagnostic_bundle())
+            if path == '/api/config/export':
+                include = (qs.get('include_keys') or ['false'])[0] == 'true'
+                return self._send_json(export_config(include))
+            if path == '/api/update/check':
+                return self._send_json(check_update())
+            if path == '/api/mcp':
+                return self._send_json(mcp_status())
+            if path == '/api/cli':
+                return self._send_json(cli_commands())
+            if path == '/api/toolbox/files':
+                rel = (qs.get('path') or [''])[0]
+                return self._send_json(file_browser(rel))
+            if path == '/api/toolbox/perf':
+                return self._send_json(process_metrics())
+            if path == '/api/toolbox/acp':
+                return self._send_json(acp_status())
+            if path == '/api/toolbox/agents':
+                return self._send_json(agent_config())
+            return self._send_json({'error': '接口不存在'}, 404)
+        except Exception as e:
+            log(f'GET {path} failed: {e}')
+            return self._send_json({'error': str(e), **user_error(str(e), 1)}, 500)
+
+    def do_POST(self) -> None:
+        path = urllib.parse.urlparse(self.path).path
+        try:
+            if path == '/api/auth/setup':
+                data = self._read_json()
+                if is_setup():
+                    return self._send_json({'error': '已完成初始化'}, 400)
+                password = str(data.get('password') or '')
+                if len(password) < 8:
+                    return self._send_json({'error': '管理密码至少 8 位'}, 400)
+                salt, hashed = pbkdf2_hash(password)
+                json_save(AUTH_PATH, {'salt': salt, 'password_hash': hashed, 'sessions': {}})
+                token = create_session()
+                return self._send_json({'ok': True, 'token': token})
+            if path == '/api/auth/login':
+                data = self._read_json()
+                password = str(data.get('password') or '')
+                token = str(data.get('token') or '')
+                if password and verify_password(password):
+                    return self._send_json({'ok': True, 'token': create_session()})
+                if token and validate_token(token):
+                    return self._send_json({'ok': True, 'token': token})
+                return self._send_json({'error': '管理密码错误', 'suggestion': '请确认输入的是初始化时设置的管理密码。'}, 401)
+            if not self._require_auth():
+                return
+            data = self._read_json()
+            if path == '/api/auth/logout':
+                revoke_token(self._token())
+                return self._send_json({'ok': True})
+            if path == '/api/chat/run':
+                return self._send_json(run_chat(data))
+            if path == '/api/providers/save':
+                try:
+                    return self._send_json(save_provider(data))
+                except Exception as e:
+                    return self._send_json({'error': str(e), **user_error(str(e), 1)}, 400)
+            if path == '/api/providers/delete':
+                pid = str(data.get('id') or '')
+                return self._send_json({'ok': delete_provider(pid)})
+            if path == '/api/config':
+                return self._send_json({'ok': True, 'config': save_config_patch(data)})
+            if path == '/api/project/validate':
+                ok, msg = validate_project(str(data.get('path') or ''))
+                if ok:
+                    save_config_patch({'project_dir': msg})
+                return self._send_json({'ok': ok, 'path': msg if ok else '', 'error': '' if ok else msg})
+            if path == '/api/models/select':
+                model = str(data.get('model') or '').strip()
+                provider = str(data.get('provider') or '').strip()
+                return self._send_json({'ok': True, 'config': save_config_patch({'default_model': model, 'default_provider': provider})})
+            if path == '/api/config/import':
+                try:
+                    return self._send_json(import_config(data))
+                except Exception as e:
+                    return self._send_json({'error': str(e), **user_error(str(e), 1)}, 400)
+            if path == '/api/service/restart':
+                if data.get('confirm') != 'RESTART':
+                    return self._send_json({'error': '重启需要 confirm=RESTART'}, 400)
+                stop_mimo_web()
+                ok = start_mimo_web()
+                return self._send_json({'ok': ok, 'status': status_payload()})
+            if path == '/api/toolbox/acp/control':
+                return self._send_json(acp_control(str(data.get('action') or 'status')) )
+            if path == '/api/toolbox/agents/import':
+                try:
+                    return self._send_json(agent_import(data))
+                except Exception as e:
+                    return self._send_json({'error': str(e), **user_error(str(e), 1)}, 400)
+            if path == '/api/toolbox/command':
+                try:
+                    return self._send_json(mimo_command(data))
+                except Exception as e:
+                    return self._send_json({'error': str(e), **user_error(str(e), 1)}, 400)
+            if path == '/api/sessions/delete':
+                sid = str(data.get('id') or '')
+                save_sessions([x for x in load_sessions() if x.get('id') != sid])
+                cfg = load_config()
+                if cfg.get('last_session_id') == sid:
+                    save_config_patch({'last_session_id': ''})
+                return self._send_json({'ok': True})
+            return self._send_json({'error': '接口不存在'}, 404)
+        except Exception as e:
+            log(f'POST {path} failed: {e}')
+            return self._send_json({'error': str(e), **user_error(str(e), 1)}, 500)
+
+
+def main() -> None:
+    log(f'Wrapper v{WRAPPER_VERSION} starting on 0.0.0.0:{LISTEN_PORT}')
+    start_mimo_web()
+    threading.Thread(target=heartbeat, daemon=True).start()
+    httpd = http.server.ThreadingHTTPServer(('0.0.0.0', LISTEN_PORT), Handler)
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
         pass
 
 
-# ============================================================
-# Entry point
-# ============================================================
-
 if __name__ == '__main__':
-    log(f'Deep Integration Wrapper v0.6.0 starting on 0.0.0.0:{LISTEN_PORT}')
-    sync_db_status()
-
-    # Start heartbeat monitor thread (auto-restart)
-    threading.Thread(target=heartbeat_monitor, daemon=True).start()
-
-    # Start HTTP server
-    server = http.server.HTTPServer(('0.0.0.0', LISTEN_PORT), APIHandler)
-    log(f'HTTP server listening on port {LISTEN_PORT}')
-    try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        log('Shutting down...')
-        server.shutdown()
+    main()
