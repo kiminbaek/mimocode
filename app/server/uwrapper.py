@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""MiMo Code fnOS App Wrapper v0.10.4
+"""MiMo Code fnOS App Wrapper v0.11.0
 
 User-first wrapper around the official `mimo` binary.
 - opens to the main conversation workspace
@@ -33,7 +33,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 APP_NAME = 'mimocode'
-WRAPPER_VERSION = '0.10.4'
+WRAPPER_VERSION = '0.11.0'
 LISTEN_PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 5670
 MIMO_PORT = int(os.environ.get('MIMO_PORT', '5669'))
 MIMO_BIN = os.environ.get('MIMO_BIN', '/usr/local/bin/mimo')
@@ -48,6 +48,7 @@ WRAPPER_LOG_PATH = VAR_DIR / 'wrapper.log'
 MIMO_PID_PATH = VAR_DIR / 'mimo.pid'
 SESSIONS_PATH = VAR_DIR / 'sessions.json'
 DIAG_PATH = VAR_DIR / 'diagnostic_bundle.json'
+BACKUP_DIR = VAR_DIR / 'config_backups'
 
 SAFE_TEXT_LIMIT = 160 * 1024
 DEFAULT_CONFIG: Dict[str, Any] = {
@@ -73,6 +74,52 @@ OFFICIAL_MODELS = [
     'xiaomi/mimo-v2.5-pro-ultraspeed',
 ]
 
+MODEL_META: Dict[str, Dict[str, Any]] = {
+    'mimo/mimo-auto': {'group': 'MiMo 官方', 'tier': 'free_limited', 'free': True, 'badge': '官方默认 / 限时免费', 'desc': '首次使用推荐，自动选择合适的 MiMo 官方模型。'},
+    'xiaomi/mimo-v2-flash': {'group': 'MiMo 官方', 'tier': 'free_limited', 'free': True, 'badge': '限时免费', 'desc': '轻量快速，适合日常问答和代码解释。'},
+    'xiaomi/mimo-v2-omni': {'group': 'MiMo 官方', 'tier': 'standard', 'free': False, 'badge': '多模态', 'desc': '官方 omni 模型，是否免费以官方账号权益为准。'},
+    'xiaomi/mimo-v2-pro': {'group': 'MiMo 官方', 'tier': 'paid_or_quota', 'free': False, 'badge': 'Pro', 'desc': '更强推理能力，适合复杂代码任务。'},
+    'xiaomi/mimo-v2.5': {'group': 'MiMo 官方', 'tier': 'paid_or_quota', 'free': False, 'badge': '2.5', 'desc': '新版通用模型，额度以官方为准。'},
+    'xiaomi/mimo-v2.5-pro': {'group': 'MiMo 官方', 'tier': 'paid_or_quota', 'free': False, 'badge': '2.5 Pro', 'desc': '新版 Pro 模型，适合复杂项目分析。'},
+    'xiaomi/mimo-v2.5-pro-ultraspeed': {'group': 'MiMo 官方', 'tier': 'paid_or_quota', 'free': False, 'badge': '极速', 'desc': '低延迟 Pro 变体。'},
+}
+
+def model_meta(name: str) -> Dict[str, Any]:
+    meta = MODEL_META.get(name, {})
+    group = meta.get('group') or ('MiMo 官方' if name in OFFICIAL_MODELS else '第三方 / 自定义')
+    return {'name': name, 'group': group, 'free': bool(meta.get('free', False)), 'tier': meta.get('tier', 'unknown'), 'badge': meta.get('badge', ''), 'desc': meta.get('desc', '')}
+
+def grouped_models(models: List[str]) -> Dict[str, List[Dict[str, Any]]]:
+    groups: Dict[str, List[Dict[str, Any]]] = {}
+    for m in models:
+        item = model_meta(m)
+        groups.setdefault(str(item['group']), []).append(item)
+    return groups
+
+FREE_MODEL_LIBRARY: List[Dict[str, Any]] = [
+    {'provider': 'MiMo 官方', 'provider_id': 'mimo_official', 'base_url': '', 'model': 'mimo/mimo-auto', 'free_type': '官方默认 / 限时免费', 'requires_key': False, 'region': 'CN', 'note': '官方默认模型，推荐首次使用；免费状态以 MiMo 官方账号权益为准。'},
+    {'provider': 'MiMo 官方', 'provider_id': 'mimo_official', 'base_url': '', 'model': 'xiaomi/mimo-v2-flash', 'free_type': '限时免费', 'requires_key': False, 'region': 'CN', 'note': '轻量快速，适合日常代码问答；额度以官方为准。'},
+    {'provider': 'OpenRouter', 'provider_id': 'openrouter', 'base_url': 'https://openrouter.ai/api/v1', 'model': 'google/gemini-2.0-flash-exp:free', 'free_type': '免费路由 / 需 Key', 'requires_key': True, 'region': 'Global', 'note': 'OpenRouter 免费模型经常变化，模型名以 OpenRouter 页面为准。'},
+    {'provider': 'OpenRouter', 'provider_id': 'openrouter', 'base_url': 'https://openrouter.ai/api/v1', 'model': 'meta-llama/llama-3.1-8b-instruct:free', 'free_type': '免费路由 / 需 Key', 'requires_key': True, 'region': 'Global', 'note': '适合轻量代码解释；如模型下线请在 OpenRouter 搜索 :free 模型替换。'},
+    {'provider': '硅基流动 SiliconFlow', 'provider_id': 'siliconflow', 'base_url': 'https://api.siliconflow.cn/v1', 'model': 'Qwen/Qwen2.5-7B-Instruct', 'free_type': '免费/赠送额度', 'requires_key': True, 'region': 'CN', 'note': '硅基流动常有免费模型或新用户额度，实际可用以控制台为准。'},
+    {'provider': '硅基流动 SiliconFlow', 'provider_id': 'siliconflow', 'base_url': 'https://api.siliconflow.cn/v1', 'model': 'THUDM/glm-4-9b-chat', 'free_type': '免费/赠送额度', 'requires_key': True, 'region': 'CN', 'note': '常见国产开源小模型入口，适合低成本测试。'},
+    {'provider': 'ModelScope 魔搭', 'provider_id': 'modelscope', 'base_url': 'https://api-inference.modelscope.cn/v1', 'model': 'Qwen/Qwen2.5-Coder-7B-Instruct', 'free_type': '免费/试用额度', 'requires_key': True, 'region': 'CN', 'note': '适合代码任务；模型和额度以 ModelScope 控制台为准。'},
+    {'provider': '智谱 GLM', 'provider_id': 'zhipu', 'base_url': 'https://open.bigmodel.cn/api/paas/v4', 'model': 'glm-4-flash', 'free_type': '免费/试用额度', 'requires_key': True, 'region': 'CN', 'note': 'GLM Flash 系列常用于低成本测试；额度以智谱控制台为准。'},
+    {'provider': 'DeepSeek', 'provider_id': 'deepseek', 'base_url': 'https://api.deepseek.com/v1', 'model': 'deepseek-chat', 'free_type': '低价/可能有赠送额度', 'requires_key': True, 'region': 'CN', 'note': 'DeepSeek 不承诺长期免费，但常作为低成本代码模型入口。'},
+]
+
+def free_model_library() -> Dict[str, Any]:
+    groups: Dict[str, List[Dict[str, Any]]] = {}
+    for item in FREE_MODEL_LIBRARY:
+        groups.setdefault(str(item.get('provider') or '其他'), []).append(item)
+    return {
+        'ok': True,
+        'updated_at': '2026-06-15',
+        'notice': '免费/限免/试用状态会随平台策略变化；本页提供常见入口和一键填入，不保证长期免费。',
+        'models': FREE_MODEL_LIBRARY,
+        'groups': groups,
+    }
+
 PROVIDER_PRESETS = [
     {'id': 'mimo_official', 'name': 'MiMo 官方模型', 'base_url': '', 'model': 'mimo/mimo-auto', 'models': OFFICIAL_MODELS, 'official': True, 'requires_key': False, 'hint': '官方默认/限时免费，推荐首次使用；不需要在这里填写 Base URL 和 API Key。'},
     {'id': 'openai', 'name': 'OpenAI 兼容', 'base_url': 'https://api.openai.com/v1', 'model': 'gpt-4o-mini', 'hint': '适合所有兼容 OpenAI Chat Completions 的服务。'},
@@ -84,6 +131,7 @@ PROVIDER_PRESETS = [
 
 VAR_DIR.mkdir(parents=True, exist_ok=True)
 ETC_DIR.mkdir(parents=True, exist_ok=True)
+BACKUP_DIR.mkdir(parents=True, exist_ok=True)
 START_TIME = time.time()
 
 
@@ -577,7 +625,7 @@ def run_chat(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 def list_models(provider: str = '') -> Dict[str, Any]:
     if provider in ('mimo_official', 'official', 'mimo'):
-        return {'ok': True, 'models': OFFICIAL_MODELS, 'raw': '\n'.join(OFFICIAL_MODELS), 'official': True}
+        return {'ok': True, 'models': OFFICIAL_MODELS, 'groups': grouped_models(OFFICIAL_MODELS), 'meta': [model_meta(x) for x in OFFICIAL_MODELS], 'raw': '\n'.join(OFFICIAL_MODELS), 'official': True}
     args = ['models'] + ([provider] if provider else [])
     rc, out, err = run_mimo(*args, timeout=25)
     raw = out or err
@@ -588,7 +636,8 @@ def list_models(provider: str = '') -> Dict[str, Any]:
             continue
         if re.match(r'^[A-Za-z0-9_.:/\-]+$', s) and len(s) > 2:
             models.append(s)
-    return {'ok': rc == 0, 'models': sorted(set(models))[:200], 'raw': sanitize_text(raw), 'official_models': OFFICIAL_MODELS, **({} if rc == 0 else user_error(raw, rc))}
+    final = sorted(set(models))[:200]
+    return {'ok': rc == 0, 'models': final, 'groups': grouped_models(final), 'meta': [model_meta(x) for x in final], 'raw': sanitize_text(raw), 'official_models': OFFICIAL_MODELS, **({} if rc == 0 else user_error(raw, rc))}
 
 def check_update() -> Dict[str, Any]:
     current = get_mimo_version()
@@ -759,6 +808,78 @@ def diagnostic_bundle() -> Dict[str, Any]:
     return {'ok': True, 'bundle': bundle, 'path': str(DIAG_PATH)}
 
 
+def project_overview() -> Dict[str, Any]:
+    cfg = load_config()
+    root = Path(cfg.get('project_dir') or str(Path.home())).expanduser()
+    ok = root.exists() and root.is_dir()
+    files = 0
+    dirs = 0
+    markers: List[str] = []
+    languages: Dict[str, int] = {}
+    max_scan = 2500
+    if ok:
+        for name in ['package.json', 'pyproject.toml', 'requirements.txt', 'go.mod', 'Cargo.toml', 'pubspec.yaml', '.git']:
+            if (root / name).exists():
+                markers.append(name)
+        for current, dirnames, filenames in os.walk(root):
+            dirnames[:] = [d for d in dirnames if d not in ('.git', 'node_modules', 'vendor', '__pycache__', '.venv', 'dist', 'build')]
+            dirs += len(dirnames)
+            for fn in filenames:
+                files += 1
+                ext = Path(fn).suffix.lower() or '[无后缀]'
+                languages[ext] = languages.get(ext, 0) + 1
+                if files >= max_scan:
+                    break
+            if files >= max_scan:
+                break
+    top_ext = sorted(languages.items(), key=lambda x: x[1], reverse=True)[:10]
+    return {'ok': ok, 'project_dir': str(root), 'markers': markers, 'files_scanned': files, 'dirs_scanned': dirs, 'truncated': files >= max_scan, 'top_extensions': top_ext, 'summary': '项目目录可访问' if ok else '项目目录不可访问'}
+
+
+def health_check() -> Dict[str, Any]:
+    st = status_payload()
+    logs = smart_logs()
+    checks = [
+        {'id': 'wrapper', 'name': 'Wrapper 服务', 'ok': True, 'detail': f'v{WRAPPER_VERSION} 已运行 {st.get("uptime_sec", 0)} 秒'},
+        {'id': 'mimo_web', 'name': '官方 Web 服务', 'ok': bool(st.get('mimo_open')), 'detail': st.get('friendly', {}).get('web', '')},
+        {'id': 'mimo_cli', 'name': 'MiMo CLI', 'ok': bool(st.get('cli_ok')), 'detail': st.get('mimo_version') or 'CLI 不可用'},
+        {'id': 'provider', 'name': '模型配置', 'ok': bool(st.get('provider_configured') or st.get('default_model')), 'detail': st.get('friendly', {}).get('model', '')},
+        {'id': 'project', 'name': '项目目录', 'ok': bool(st.get('project_ok')), 'detail': st.get('project_dir', '')},
+        {'id': 'logs', 'name': '错误日志', 'ok': len(logs.get('issues', [])) == 0, 'detail': f'{len(logs.get("issues", []))} 条需关注日志'},
+    ]
+    score = sum(1 for c in checks if c['ok'])
+    return {'ok': True, 'score': score, 'total': len(checks), 'checks': checks, 'suggestions': [i.get('suggestion') for i in logs.get('issues', [])[:5] if i.get('suggestion')]}
+
+
+def security_boundary() -> Dict[str, Any]:
+    return {'ok': True, 'items': [
+        {'title': '官方二进制边界', 'text': '应用保留官方 mimo 二进制，不在 UI 中提供替换或反编译能力。'},
+        {'title': '凭据存储', 'text': 'Provider Key 仅保存在本机 NAS 配置文件中；导出默认脱敏，含 Key 导出需显式选择。'},
+        {'title': '命令执行边界', 'text': '工具箱命令助手使用白名单，不提供任意 shell 输入。'},
+        {'title': '文件访问边界', 'text': '项目文件浏览为只读，限制在已选择的项目目录内。'},
+        {'title': '高级功能边界', 'text': 'MCP、ACP、Agent 权限等高级功能默认隐藏，操作前需要明确确认。'},
+        {'title': '网络边界', 'text': '官方会话由 mimo web 提供；第三方模型请求由官方 CLI/配置处理，工作台只负责配置和状态展示。'},
+    ]}
+
+
+def create_config_backup(include_keys: bool = False, reason: str = '') -> Dict[str, Any]:
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    ts = time.strftime('%Y%m%d-%H%M%S')
+    path = BACKUP_DIR / f'config-backup-{ts}.json'
+    data = export_config(include_keys)
+    data['reason'] = sanitize_text(reason, 300)
+    json_save(path, data, 0o600)
+    return {'ok': True, 'path': str(path), 'filename': path.name, 'include_keys': include_keys}
+
+
+def list_config_backups() -> Dict[str, Any]:
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    items = []
+    for fp in sorted(BACKUP_DIR.glob('config-backup-*.json'), key=lambda x: x.stat().st_mtime, reverse=True)[:30]:
+        items.append({'filename': fp.name, 'path': str(fp), 'size': fp.stat().st_size, 'mtime': int(fp.stat().st_mtime)})
+    return {'ok': True, 'backups': items, 'dir': str(BACKUP_DIR)}
+
+
 def cli_commands() -> Dict[str, Any]:
     cfg = load_config()
     p = cfg.get('project_dir') or '/path/to/project'
@@ -825,11 +946,19 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             if path == '/api/status':
                 return self._send_json(status_payload())
+            if path == '/api/overview':
+                return self._send_json(project_overview())
+            if path == '/api/health':
+                return self._send_json(health_check())
+            if path == '/api/security':
+                return self._send_json(security_boundary())
             if path == '/api/providers':
                 return self._send_json({'providers': provider_items(), 'presets': PROVIDER_PRESETS, 'config': load_config()})
             if path == '/api/models':
                 provider = (qs.get('provider') or [''])[0]
                 return self._send_json(list_models(provider))
+            if path == '/api/free-models':
+                return self._send_json(free_model_library())
             if path == '/api/sessions':
                 return self._send_json({'sessions': sorted(load_sessions(), key=lambda x: int(x.get('updated_at', 0)), reverse=True)})
             if path == '/api/logs':
@@ -839,6 +968,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             if path == '/api/config/export':
                 include = (qs.get('include_keys') or ['false'])[0] == 'true'
                 return self._send_json(export_config(include))
+            if path == '/api/config/backups':
+                return self._send_json(list_config_backups())
             if path == '/api/update/check':
                 return self._send_json(check_update())
             if path == '/api/mcp':
@@ -911,9 +1042,14 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 return self._send_json({'ok': True, 'config': save_config_patch({'default_model': model, 'default_provider': provider})})
             if path == '/api/config/import':
                 try:
+                    create_config_backup(False, 'before import')
                     return self._send_json(import_config(data))
                 except Exception as e:
                     return self._send_json({'error': str(e), **user_error(str(e), 1)}, 400)
+            if path == '/api/config/backup':
+                include = bool(data.get('include_keys'))
+                reason = str(data.get('reason') or 'manual')
+                return self._send_json(create_config_backup(include, reason))
             if path == '/api/service/restart':
                 if data.get('confirm') != 'RESTART':
                     return self._send_json({'error': '重启需要 confirm=RESTART'}, 400)
