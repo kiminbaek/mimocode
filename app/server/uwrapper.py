@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""MiMo Code fnOS App Wrapper v0.11.8
+"""MiMo Code fnOS App Wrapper v0.11.9
 
 User-first wrapper around the official `mimo` binary.
 - opens to the main conversation workspace
@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 APP_NAME = 'mimocode'
-WRAPPER_VERSION = '0.11.8'
+WRAPPER_VERSION = '0.11.9'
 LISTEN_PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 5670
 MIMO_PORT = int(os.environ.get('MIMO_PORT', '5669'))
 MIMO_BIN = os.environ.get('MIMO_BIN', '/usr/local/bin/mimo')
@@ -679,7 +679,7 @@ def status_payload() -> Dict[str, Any]:
         'project_ok': project_ok,
         'cli_ok': cli_ok,
         'native_web_proxy_url': '/mimo-web/',
-        'native_web_note': '官方会话通过 Wrapper 同源代理访问本机 MiMo Web，不依赖固定 IP、主机名或外部端口。',
+        'native_web_note': '官方会话默认由浏览器直连当前主机的 5669 端口；/mimo-web/ 仅保留为备用代理入口。',
         'friendly': {
             'service': '运行中' if mimo_open else '未运行',
             'web': '可访问' if mimo_open else '不可访问',

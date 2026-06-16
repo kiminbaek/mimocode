@@ -1,4 +1,4 @@
-/* MiMo Code fnOS App v0.11.8 */
+/* MiMo Code fnOS App v0.11.9 */
 const $ = s => document.querySelector(s);
 const $$ = s => Array.from(document.querySelectorAll(s));
 const state = { token: localStorage.getItem('mimocode_token') || '', setup: false, status: null, providers: [], presets: [], config: {}, view: 'workspace', sessions: [], officialFrameReady: false };
@@ -63,23 +63,12 @@ async function refreshAll(){
   $('#statusLine').innerHTML=`${state.status.mimo_open?'<span class="dot ok"></span>':'<span class="dot bad"></span>'} 服务${esc(state.status.friendly.service)} · Provider ${esc(state.status.friendly.provider)} · Wrapper v${esc(state.status.wrapper_version)}`;
   const toolTab=document.querySelector('[data-view="toolbox"]'); if(toolTab) toolTab.classList.toggle('hidden', !state.config.toolbox_enabled);
 }
-function normalizeOfficialUrl(path){
-  let u=String(path||'/mimo-web/');
-  if(/^https?:\/\//i.test(u)){ try{ const x=new URL(u); u=x.pathname+x.search+x.hash; }catch(e){ u='/mimo-web/'; } }
-  if(!u.startsWith('/')) u='/'+u;
-  if(u==='/') return '/mimo-web/';
-  if(u.startsWith('/mimo-web')) return u;
-  if(u.startsWith('/api/') || u.startsWith('/css/') || u.startsWith('/js/')) return '/mimo-web/';
-  return '/mimo-web' + u;
+function officialDirectUrl(){
+  const rawHost=location.hostname || (location.host||'').split(':')[0];
+  const host=(rawHost.includes(':') && !rawHost.startsWith('[')) ? '['+rawHost+']' : rawHost;
+  return 'http://' + host + ':5669/';
 }
-function rememberOfficialFrameUrl(){
-  const f=$('#nativeFrame');
-  if(!f) return;
-  try{
-    const loc=f.contentWindow.location;
-    if(loc && loc.pathname) sessionStorage.setItem('mimocode_official_last_url', normalizeOfficialUrl(loc.pathname + loc.search + loc.hash));
-  }catch(e){}
-}
+function rememberOfficialFrameUrl(){ /* 直连官方页面跨端口不同源，不能可靠读取 iframe 内部路由；保持 no-op，避免缓存错误路径。 */ }
 function navigate(view){
   if(view==='toolbox' && !state.config.toolbox_enabled) view='advanced';
   if(state.view==='official' && view!=='official') rememberOfficialFrameUrl();
@@ -140,7 +129,7 @@ async function saveGuideProvider(){
 
 function renderWorkspace(){
   const model=state.config.default_model||'mimo/mimo-auto';
-  const nativeUrl=`${location.origin}/mimo-web/`;
+  const nativeUrl=officialDirectUrl();
   $('#content').innerHTML=`<section class="panel hero-panel"><div class="hero-layout"><div><h1>MiMo Code 工作台</h1><p>工作台负责状态、模型、诊断和配置。真正聊天进入独立「官方会话」页面，由官方 mimo web 接管。</p><div class="hero-actions"><button class="btn primary" onclick="navigate('official')">进入官方会话</button><button class="btn ghost" onclick="openNativeWeb()">新窗口打开</button><button class="btn ghost" onclick="copyText('${esc(nativeUrl)}')">复制会话地址</button></div></div><div class="hero-status">${statusCards()}</div></div></section>
   <section class="panel runtime-panel"><div class="panel-head"><div><h2>运行状态</h2><p>图形化展示 Wrapper、官方 Web、Provider 和 CLI 状态。</p></div><button class="btn ghost" onclick="refreshAll().then(renderWorkspace)">刷新状态</button></div><div class="status-grid">${runtimeCards()}</div></section>
   <div class="dashboard-grid">
@@ -159,23 +148,20 @@ async function renderOverview(){
   try{ const r=await api('overview'); $('#overviewBox').innerHTML=`<div class="status-grid">${card('目录',r.project_dir,r.ok?'ok':'warn')}${card('文件扫描',String(r.files_scanned||0),r.ok?'ok':'warn')}${card('目录扫描',String(r.dirs_scanned||0),r.ok?'ok':'warn')}${card('扫描截断',r.truncated?'是':'否',r.truncated?'warn':'ok')}</div><h3>项目标记</h3><p>${(r.markers||[]).map(x=>`<span class="pill">${esc(x)}</span>`).join('')||'未识别到常见项目标记'}</p><h3>文件类型 Top 10</h3><div class="provider-list">${(r.top_extensions||[]).map(x=>`<div class="provider-card"><b>${esc(x[0])}</b><p>${esc(x[1])} 个文件</p></div>`).join('')||'<div class="empty">暂无数据</div>'}</div>`; }catch(e){ $('#overviewBox').textContent=e.message; }
 }
 async function renderOfficialChat(){
-  const embedUrl=normalizeOfficialUrl(sessionStorage.getItem('mimocode_official_last_url') || '/mimo-web/');
+  const embedUrl=officialDirectUrl();
   const content=$('#content');
   const existing=$('#nativeFrame');
   if(existing){
     content.classList.add('official-content');
     return;
   }
-  content.innerHTML='<section class="panel"><h2>官方会话</h2><p class="hint">正在准备官方会话登录态...</p></section>';
-  await ensureSessionCookie();
   content.innerHTML='';
   content.classList.add('official-content');
   const iframe=document.createElement('iframe');
   iframe.id='nativeFrame'; iframe.className='official-native-frame'; iframe.src=embedUrl; iframe.title='MiMo 官方会话';
-  iframe.addEventListener('load',rememberOfficialFrameUrl);
   content.appendChild(iframe);
 }
-async function openNativeWeb(){ await ensureSessionCookie(); window.open(normalizeOfficialUrl(sessionStorage.getItem('mimocode_official_last_url') || '/mimo-web/'),'_blank'); }
+async function openNativeWeb(){ window.open(officialDirectUrl(),'_blank'); }
 function reloadNativeFrame(){ const f=$('#nativeFrame'); if(f) f.src=f.src; }
 
 async function enableToolboxAndOpenCli(){ if(!state.config.toolbox_enabled){ await api('config',{method:'POST',body:JSON.stringify({toolbox_enabled:true})}); await refreshAll(); } navigate('toolbox'); setTimeout(toolCommand,80); }
