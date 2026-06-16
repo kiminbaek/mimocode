@@ -452,14 +452,18 @@ def start_mimo_web() -> bool:
             mimo_real = Path(MIMO_BIN).resolve()
             mimo_cwd = mimo_real.parent
             log(f"starting mimo web: real={mimo_real} cwd={mimo_cwd}")
+            # Automatic confirm trust workspace: send 'y\n' to stdin
             proc = subprocess.Popen(
-                [MIMO_BIN, 'web', '--hostname', '0.0.0.0', '--port', str(MIMO_PORT)],
+                [MIMO_BIN, 'serve', '--hostname', '0.0.0.0', '--port', str(MIMO_PORT)],
+                stdin=subprocess.PIPE,
                 stdout=logf,
                 stderr=subprocess.STDOUT,
                 start_new_session=True,
                 env=make_env(),
                 cwd=mimo_cwd,
             )
+            proc.stdin.write(b'y\n')
+            proc.stdin.flush()
         MIMO_PID_PATH.write_text(str(proc.pid))
         for _ in range(80):
             if port_open(MIMO_PORT):
