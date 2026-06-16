@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 APP_NAME = 'mimocode'
-WRAPPER_VERSION = '0.11.14'
+WRAPPER_VERSION = '0.11.15'
 LISTEN_PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 5670
 MIMO_PORT = int(os.environ.get('MIMO_PORT', '5669'))
 MIMO_BIN = os.environ.get('MIMO_BIN', '/usr/local/bin/mimo')
@@ -1055,7 +1055,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         log('%s %s' % (self.client_address[0], fmt % args))
 
     def translate_path(self, path: str) -> str:
-        rel = urllib.parse.urlparse(path).path.lstrip('/') or 'index.html'
+        # fnOS gateway passes full path with /app/mimocode prefix, need to strip
+        parsed_path = urllib.parse.urlparse(path).path
+        if parsed_path.startswith('/app/mimocode'):
+            parsed_path = parsed_path[len('/app/mimocode'):]
+        rel = parsed_path.lstrip('/') or 'index.html'
         return str((PUBLIC_DIR / rel).resolve())
 
     def _send_json(self, data: Any, status: int = 200) -> None:
@@ -1153,10 +1157,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         start_mimo_web()
         parsed = urllib.parse.urlparse(self.path)
         proxy_path = parsed.path
-        if parsed.path.startswith('/mimo-web'):
-            upstream_path = parsed.path[len('/mimo-web'):] or '/'
+        # fnOS gateway passes full path with /app/mimocode prefix, need to strip
+        if proxy_path.startswith('/app/mimocode'):
+            proxy_path = proxy_path[len('/app/mimocode'):] or '/'
+        if proxy_path.startswith('/mimo-web'):
+            upstream_path = proxy_path[len('/mimo-web'):] or '/'
         else:
-            upstream_path = parsed.path or '/'
+            upstream_path = proxy_path or '/'
         if parsed.query:
             upstream_path += '?' + parsed.query
         headers = {k: v for k, v in self.headers.items() if k.lower() not in {'host', 'connection', 'content-length', 'accept-encoding'}}
@@ -1237,6 +1244,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     def do_GET(self) -> None:
         path = urllib.parse.urlparse(self.path).path
+        # fnOS gateway passes full path with /app/mimocode prefix, need to strip
+        if path.startswith('/app/mimocode'):
+            path = path[len('/app/mimocode'):] or '/'
         try:
             if path.startswith('/mimo-web') or self._should_proxy_mimo_root(path):
                 return self._proxy_mimo_web()
@@ -1295,24 +1305,36 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     def do_PUT(self) -> None:
         path = urllib.parse.urlparse(self.path).path
+        # fnOS gateway passes full path with /app/mimocode prefix, need to strip
+        if path.startswith('/app/mimocode'):
+            path = path[len('/app/mimocode'):] or '/'
         if path.startswith('/mimo-web') or self._should_proxy_mimo_root(path):
             return self._proxy_mimo_web()
         return self._send_json({'error': '接口不存在'}, 404)
 
     def do_PATCH(self) -> None:
         path = urllib.parse.urlparse(self.path).path
+        # fnOS gateway passes full path with /app/mimocode prefix, need to strip
+        if path.startswith('/app/mimocode'):
+            path = path[len('/app/mimocode'):] or '/'
         if path.startswith('/mimo-web') or self._should_proxy_mimo_root(path):
             return self._proxy_mimo_web()
         return self._send_json({'error': '接口不存在'}, 404)
 
     def do_DELETE(self) -> None:
         path = urllib.parse.urlparse(self.path).path
+        # fnOS gateway passes full path with /app/mimocode prefix, need to strip
+        if path.startswith('/app/mimocode'):
+            path = path[len('/app/mimocode'):] or '/'
         if path.startswith('/mimo-web') or self._should_proxy_mimo_root(path):
             return self._proxy_mimo_web()
         return self._send_json({'error': '接口不存在'}, 404)
 
     def do_POST(self) -> None:
         path = urllib.parse.urlparse(self.path).path
+        # fnOS gateway passes full path with /app/mimocode prefix, need to strip
+        if path.startswith('/app/mimocode'):
+            path = path[len('/app/mimocode'):] or '/'
         try:
             if path.startswith('/mimo-web') or self._should_proxy_mimo_root(path):
                 return self._proxy_mimo_web()
