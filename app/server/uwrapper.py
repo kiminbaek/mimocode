@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""MiMo Code fnOS App Wrapper v0.11.4
+"""MiMo Code fnOS App Wrapper v0.11.5
 
 User-first wrapper around the official `mimo` binary.
 - opens to the main conversation workspace
@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 APP_NAME = 'mimocode'
-WRAPPER_VERSION = '0.11.4'
+WRAPPER_VERSION = '0.11.5'
 LISTEN_PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 5670
 MIMO_PORT = int(os.environ.get('MIMO_PORT', '5669'))
 MIMO_BIN = os.environ.get('MIMO_BIN', '/usr/local/bin/mimo')
@@ -146,11 +146,17 @@ def free_model_library() -> Dict[str, Any]:
 
 PROVIDER_PRESETS = [
     {'id': 'mimo_official', 'name': 'MiMo 官方模型', 'base_url': '', 'model': 'mimo/mimo-auto', 'models': OFFICIAL_MODELS, 'official': True, 'requires_key': False, 'hint': '官方默认/限时免费，推荐首次使用；不需要在这里填写 Base URL 和 API Key。'},
-    {'id': 'openai', 'name': 'OpenAI 兼容', 'base_url': 'https://api.openai.com/v1', 'model': 'gpt-4o-mini', 'hint': '适合所有兼容 OpenAI Chat Completions 的服务。'},
-    {'id': 'deepseek', 'name': 'DeepSeek', 'base_url': 'https://api.deepseek.com/v1', 'model': 'deepseek-chat', 'hint': '国产常用，Key 从 DeepSeek 控制台获取。'},
-    {'id': 'siliconflow', 'name': '硅基流动 SiliconFlow', 'base_url': 'https://api.siliconflow.cn/v1', 'model': 'deepseek-ai/DeepSeek-V3', 'hint': '国内访问友好，模型名以控制台为准。'},
-    {'id': 'kimi', 'name': 'Kimi / Moonshot', 'base_url': 'https://api.moonshot.cn/v1', 'model': 'moonshot-v1-8k', 'hint': '长上下文模型，Key 从 Moonshot 控制台获取。'},
-    {'id': 'custom', 'name': '自定义 OpenAI 兼容', 'base_url': '', 'model': '', 'hint': '填写服务商给你的 Base URL、API Key 和模型名。'},
+    {'id': 'opencode', 'name': 'OpenCode', 'base_url': 'https://opencode.ai/zen/v1', 'model': 'deepseek-v4-flash-free', 'models': ['deepseek-v4-flash-free', 'mimo-v2.5-free', 'nemotron-3-ultra-free', 'nemotron-3-super-free'], 'requires_key': False, 'hint': '免费 Provider，可不填写 API Key；免费状态以平台实时政策为准。'},
+    {'id': 'kilo', 'name': 'Kilo Code', 'base_url': 'https://api.kilo.ai/api/gateway', 'model': 'kilo-auto/free', 'models': ['kilo-auto/free', 'nvidia/nemotron-3-ultra-550b-a55b:free', 'nvidia/nemotron-3-super-49b-v1.5:free', 'poolside/laguna-m.1:free', 'poolside/laguna-xs.2:free', 'stepfun/step-3.7-flash:free', 'nex-agi/nex-n2-pro:free'], 'requires_key': False, 'hint': '免费 Provider，可不填写 API Key；免费状态以平台实时政策为准。'},
+    {'id': 'openrouter', 'name': 'OpenRouter', 'base_url': 'https://openrouter.ai/api/v1', 'model': 'google/gemini-2.0-flash-exp:free', 'models': ['google/gemini-2.0-flash-exp:free', 'meta-llama/llama-3.1-8b-instruct:free'], 'requires_key': True, 'hint': '可选择免费模型，但通常仍需要 OpenRouter API Key 或账号授权。'},
+    {'id': 'github_models', 'name': 'GitHub Models', 'base_url': 'https://models.inference.ai.azure.com', 'model': 'gpt-4o-mini', 'requires_key': True, 'hint': 'GitHub Models 试用/免费额度以 GitHub 官方政策为准，通常需要 Token。'},
+    {'id': 'zhipu', 'name': '智谱 GLM', 'base_url': 'https://open.bigmodel.cn/api/paas/v4', 'model': 'glm-4-flash', 'requires_key': True, 'hint': 'glm-4-flash 等免费/试用政策以智谱平台实时政策为准。'},
+    {'id': 'openai', 'name': 'OpenAI 兼容', 'base_url': 'https://api.openai.com/v1', 'model': 'gpt-4o-mini', 'requires_key': True, 'hint': '适合所有兼容 OpenAI Chat Completions 的服务。'},
+    {'id': 'deepseek', 'name': 'DeepSeek', 'base_url': 'https://api.deepseek.com/v1', 'model': 'deepseek-chat', 'requires_key': True, 'hint': '国产常用，Key 从 DeepSeek 控制台获取。'},
+    {'id': 'siliconflow', 'name': '硅基流动 SiliconFlow', 'base_url': 'https://api.siliconflow.cn/v1', 'model': 'deepseek-ai/DeepSeek-V3', 'requires_key': True, 'hint': '国内访问友好，模型名以控制台为准。'},
+    {'id': 'siliconflow_intl', 'name': 'SiliconFlow International', 'base_url': 'https://api.siliconflow.com/v1', 'model': 'Qwen/Qwen2.5-7B-Instruct', 'requires_key': True, 'hint': '国际站免费/试用模型以平台实时政策为准。'},
+    {'id': 'kimi', 'name': 'Kimi / Moonshot', 'base_url': 'https://api.moonshot.cn/v1', 'model': 'moonshot-v1-8k', 'requires_key': True, 'hint': '长上下文模型，Key 从 Moonshot 控制台获取。'},
+    {'id': 'custom', 'name': '自定义 OpenAI 兼容', 'base_url': '', 'model': '', 'requires_key': True, 'hint': '填写服务商给你的 Base URL、API Key 和模型名。'},
 ]
 
 VAR_DIR.mkdir(parents=True, exist_ok=True)
@@ -501,7 +507,8 @@ def save_provider(payload: Dict[str, Any]) -> Dict[str, Any]:
         return {'ok': True, 'provider': {'id': 'mimo_official', 'name': 'MiMo 官方模型', 'model': model, 'has_key': False, 'official': True}, 'config': cfg}
     if not base_url:
         raise ValueError('请填写接口地址 Base URL')
-    free_no_key = (not api_key) and provider_id in {'opencode', 'kilo'}
+    preset = next((p for p in PROVIDER_PRESETS if p.get('id') == provider_id), {})
+    free_no_key = (not api_key) and (provider_id in {'opencode', 'kilo'} or preset.get('requires_key') is False)
     if not api_key and not free_no_key:
         raise ValueError('请填写 API Key')
     data = read_mimo_auth()
@@ -1039,10 +1046,20 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 data = text.encode('utf-8')
             self.send_response(resp.status, resp.reason)
             skip = {'transfer-encoding', 'connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailers', 'upgrade', 'content-length'}
+            has_cache_control = False
             for k, v in resp_headers:
-                if k.lower() in skip:
+                kl = k.lower()
+                if kl in skip:
                     continue
+                if kl == 'cache-control':
+                    has_cache_control = True
+                    if parsed.path.startswith('/mimo-web/assets/'):
+                        continue
                 self.send_header(k, v)
+            if parsed.path.startswith('/mimo-web/assets/'):
+                self.send_header('Cache-Control', 'public, max-age=86400')
+            elif not has_cache_control:
+                self.send_header('Cache-Control', 'no-store')
             self.send_header('X-MiMo-Code-Proxy', 'mimo-web')
             self.send_header('Content-Length', str(len(data)))
             self.end_headers()

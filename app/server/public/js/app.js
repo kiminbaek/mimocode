@@ -1,4 +1,4 @@
-/* MiMo Code fnOS App v0.11.4 */
+/* MiMo Code fnOS App v0.11.5 */
 const $ = s => document.querySelector(s);
 const $$ = s => Array.from(document.querySelectorAll(s));
 const state = { token: localStorage.getItem('mimocode_token') || '', setup: false, status: null, providers: [], presets: [], config: {}, view: 'workspace', sessions: [] };
@@ -9,6 +9,7 @@ function toast(msg,type='ok'){ const el=document.createElement('div'); el.classN
 async function copyText(text){ await navigator.clipboard.writeText(text); toast('已复制到剪贴板'); }
 function timeText(ts){ if(!ts)return '-'; return new Date(ts*1000).toLocaleString('zh-CN'); }
 function yesNo(v){ return v ? '正常' : '需处理'; }
+async function ensureSessionCookie(){ try{ await api('auth/session-cookie',{method:'POST',body:JSON.stringify({})}); return true; }catch(e){ console.warn('session cookie refresh failed', e); return false; } }
 
 async function api(path, opts={}){
   const headers=Object.assign({'Content-Type':'application/json'},opts.headers||{});
@@ -37,7 +38,7 @@ async function init(){
   try{
     const s=await api('auth/status'); state.setup=!!s.setup;
     if(!state.setup || !state.token) return showAuth();
-    await refreshAll(); showMain(); navigate('workspace');
+    await refreshAll(); showMain(); ensureSessionCookie(); navigate('workspace');
   }catch(e){ showAuth(e.message); }
 }
 function bindStaticEvents(){
@@ -52,7 +53,7 @@ async function handleAuth(){
   try{
     const path=state.setup?'auth/login':'auth/setup';
     const r=await api(path,{method:'POST',body:JSON.stringify({password})});
-    state.token=r.token; localStorage.setItem('mimocode_token',r.token); await refreshAll(); showMain(); navigate('workspace');
+    state.token=r.token; localStorage.setItem('mimocode_token',r.token); await refreshAll(); showMain(); ensureSessionCookie(); navigate('workspace');
   }catch(e){ $('#authMsg').textContent=e.data?.suggestion||e.message; $('#authMsg').className='msg err'; }
 }
 async function refreshAll(){
@@ -79,6 +80,9 @@ function statusCards(){ const f=state.status?.friendly||{}; return `<div class="
 </div>`; }
 function card(k,v,type=''){ return `<div class="stat ${type}"><div class="k">${esc(k)}</div><div class="v">${esc(v)}</div></div>`; }
 function runtimeCards(){ const st=state.status||{}, f=st.friendly||{}; const uptime=st.uptime_sec?Math.floor(st.uptime_sec/60)+' 分钟':'-'; return `${card('Wrapper','运行中 · '+uptime,'ok')}${card('官方 Web',f.web||'-',st.mimo_open?'ok':'warn')}${card('Provider',f.provider||'-',st.provider_configured?'ok':'warn')}${card('CLI',f.cli||'-',st.cli_ok?'ok':'warn')}${card('服务端口','Wrapper '+(st.wrapper_port||'-')+' / Web '+(st.mimo_port||'-'),'ok')}${card('当前模型',st.default_model||'未选择',st.default_model?'ok':'warn')}`; }
+function presetFromFreeModel(m){ return {id:m.provider_id||'custom', name:m.provider||m.provider_id||'自定义服务商', base_url:m.base_url||'', model:m.model||'', models:[m.model].filter(Boolean), requires_key:m.requires_key!==false, hint:(m.requires_key===false?'该服务商可不填写 API Key；':'该服务商通常需要 API Key；')+'免费/限免状态以平台实时政策为准。'}; }
+function ensurePresetOption(p){ if(!p||!p.id) return; if(!state.presets.find(x=>x.id===p.id)) state.presets.unshift(p); const sel=$('#guidePreset'); if(sel && ![...sel.options].some(o=>o.value===p.id)){ sel.insertAdjacentHTML('afterbegin', `<option value="${esc(p.id)}">${esc(p.name||p.id)}</option>`); } }
+function applyCurrentProviderConfig(){ const cfg=state.config||{}, sel=$('#guidePreset'); if(!sel || !cfg.default_provider){ fillPreset(); return; } const p=state.presets.find(x=>x.id===cfg.default_provider); if(p) ensurePresetOption(p); if([...sel.options].some(o=>o.value===cfg.default_provider)){ sel.value=cfg.default_provider; } fillPreset(); if(cfg.default_model){ const ms=$('#guideModelSelect'), mi=$('#guideModel'); if(ms && !ms.classList.contains('hidden')){ if(![...ms.options].some(o=>o.value===cfg.default_model)) ms.insertAdjacentHTML('afterbegin', `<option value="${esc(cfg.default_model)}">${esc(cfg.default_model)}</option>`); ms.value=cfg.default_model; } if(mi) mi.value=cfg.default_model; } }
 function providerGuide(){
   const opts=state.presets.map(p=>`<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('');
   return `<section class="panel guide"><div class="panel-head"><div><h2>模型配置</h2><p>这里始终显示当前待保存配置。免费模型库点“填入配置”后，会自动回到这里；无需 Key 的模型可直接保存，需要 Key 的平台再填写 API Key。</p></div></div>
@@ -94,15 +98,15 @@ function providerGuide(){
 }
 function fillPreset(){
   const id=$('#guidePreset')?.value; const p=state.presets.find(x=>x.id===id)||{};
-  const official=!!p.official || id==='mimo_official';
+  const official=!!p.official || id==='mimo_official'; const noKey=p.requires_key===false;
   if($('#guideBase')){ $('#guideBase').value=p.base_url||''; $('#guideBase').disabled=official; $('#guideBase').placeholder=official?'官方模型无需 Base URL':'https://api.example.com/v1'; }
-  if($('#guideKey')){ $('#guideKey').value=''; $('#guideKey').disabled=official; $('#guideKey').placeholder=official?'官方模型无需 API Key':'只保存在本机 NAS'; }
+  if($('#guideKey')){ $('#guideKey').value=''; $('#guideKey').disabled=official||noKey; $('#guideKey').placeholder=official?'官方模型无需 API Key':(noKey?'该免费服务商可不填写 API Key':'只保存在本机 NAS'); }
   if($('#guideName')) $('#guideName').value=p.name||'';
   const sel=$('#guideModelSelect'), inp=$('#guideModel');
   if(sel){
     const models=p.models||OFFICIAL_MODELS;
     sel.innerHTML=models.map(m=>`<option value="${esc(m)}">${esc(m)}${m==='mimo/mimo-auto'?'（官方默认 / 限时免费）':''}</option>`).join('');
-    sel.value=p.model||models[0]||''; sel.classList.toggle('hidden', !official); inp.classList.toggle('hidden', official); if(!official) inp.value=p.model||'';
+    sel.value=p.model||models[0]||''; const useSelect=official || (Array.isArray(p.models)&&p.models.length>0); sel.classList.toggle('hidden', !useSelect); inp.classList.toggle('hidden', useSelect); if(!useSelect) inp.value=p.model||'';
   }
   if($('#guideHint')) $('#guideHint').textContent=p.hint||'';
   if($('#guidePreset')) $('#guidePreset').onchange=fillPreset;
@@ -140,21 +144,21 @@ async function renderOfficialChat(){
   const embedUrl='/mimo-web/';
   const content=$('#content');
   content.innerHTML='<section class="panel"><h2>官方会话</h2><p class="hint">正在准备官方会话登录态...</p></section>';
-  try{ await api('auth/session-cookie',{method:'POST',body:JSON.stringify({})}); }catch(e){ toast('官方会话登录态刷新失败：'+e.message,'err'); }
+  await ensureSessionCookie();
   content.innerHTML='';
   content.classList.add('official-content');
   const iframe=document.createElement('iframe');
   iframe.id='nativeFrame'; iframe.className='official-native-frame'; iframe.src=embedUrl; iframe.title='MiMo 官方会话';
   content.appendChild(iframe);
 }
-async function openNativeWeb(){ try{ await api('auth/session-cookie',{method:'POST',body:JSON.stringify({})}); }catch(e){ toast('官方会话登录态刷新失败：'+e.message,'err'); } window.open('/mimo-web/','_blank'); }
+async function openNativeWeb(){ await ensureSessionCookie(); window.open('/mimo-web/','_blank'); }
 function reloadNativeFrame(){ const f=$('#nativeFrame'); if(f) f.src=f.src; }
 
 async function enableToolboxAndOpenCli(){ if(!state.config.toolbox_enabled){ await api('config',{method:'POST',body:JSON.stringify({toolbox_enabled:true})}); await refreshAll(); } navigate('toolbox'); setTimeout(toolCommand,80); }
 function modelBadge(m){ if(m.free) return '<span class="pill free">免费/限免</span>'; if(m.badge) return `<span class="pill">${esc(m.badge)}</span>`; return ''; }
 async function renderProviders(){
   $('#content').innerHTML=`<section class="panel"><div class="panel-head"><div><h2>模型与服务商</h2><p>选择模型、填写 Key、保存默认配置。官方模型和部分免费 Provider 可不填 Key。</p></div><button class="btn ghost" onclick="refreshAll().then(renderProviders)">刷新</button></div>${providerGuide()}<div id="modelGroups" class="output">加载模型中...</div><h3>已保存 Provider</h3><div class="provider-list">${state.providers.map(p=>`<div class="provider-card"><h3>${esc(p.name)}</h3><p>模型：${esc(p.model||'-')}</p><p>Key：${p.has_key?'已保存':'未保存/无需 Key'}</p></div>`).join('')||'<div class="empty">还没有第三方 Provider；官方模型可直接使用。</div>'}</div></section>`;
-  fillPreset();
+  applyCurrentProviderConfig();
   try{
     const r=await api('models?provider=mimo_official');
     const groups=r.groups||{};
@@ -175,19 +179,21 @@ function useFreeModel(raw){
   const m=JSON.parse(raw);
   navigate('providers');
   setTimeout(()=>{
+    const p=presetFromFreeModel(m);
+    ensurePresetOption(p);
     const preset=$('#guidePreset');
-    if(preset){
-      const known=['mimo_official','deepseek','siliconflow','opencode','kilo'];
-      preset.value=known.includes(m.provider_id)?m.provider_id:'custom';
-      fillPreset();
-    }
+    if(preset){ preset.value=p.id; fillPreset(); }
     if($('#guideName')) $('#guideName').value=m.provider||m.provider_id||'免费模型';
     if($('#guideBase')) { $('#guideBase').disabled=false; $('#guideBase').value=m.base_url||''; }
-    if($('#guideModel')) { $('#guideModel').classList.remove('hidden'); $('#guideModel').value=m.model||''; }
-    if($('#guideModelSelect')) $('#guideModelSelect').classList.add('hidden');
-    if($('#guideKey')) { $('#guideKey').disabled=!m.requires_key; $('#guideKey').placeholder=m.requires_key?'填写该平台 API Key':'无需 API Key'; }
+    if($('#guideModelSelect') && !$('#guideModelSelect').classList.contains('hidden')){
+      const sel=$('#guideModelSelect');
+      if(![...sel.options].some(o=>o.value===m.model)) sel.insertAdjacentHTML('afterbegin', `<option value="${esc(m.model)}">${esc(m.model)}</option>`);
+      sel.value=m.model||'';
+    }
+    if($('#guideModel')) $('#guideModel').value=m.model||'';
+    if($('#guideKey')) { $('#guideKey').disabled=m.requires_key===false; $('#guideKey').placeholder=m.requires_key?'填写该平台 API Key':'无需 API Key'; }
+    const hint=$('#guideHint'); if(hint) hint.textContent=m.requires_key?'需要到对应平台申请 API Key，填入后点保存。':'该 Provider 标记为无需 API Key，直接点保存为默认配置。';
     toast(m.requires_key?'已填入配置，请填写 API Key 后保存':'已填入配置，该模型无需 Key，可直接保存');
-      const hint=$('#guideHint'); if(hint) hint.textContent=m.requires_key?'需要到对应平台申请 API Key，填入后点保存。':'该 Provider 标记为无需 API Key，直接点保存为默认配置。';
   },80);
 }
 async function renderHealth(){
