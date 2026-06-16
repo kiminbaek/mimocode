@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""MiMo Code fnOS App Wrapper v0.11.1
+"""MiMo Code fnOS App Wrapper v0.11.2
 
 User-first wrapper around the official `mimo` binary.
 - opens to the main conversation workspace
@@ -14,6 +14,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import http.client
 import http.server
 import json
 import os
@@ -33,7 +34,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 APP_NAME = 'mimocode'
-WRAPPER_VERSION = '0.11.1'
+WRAPPER_VERSION = '0.11.2'
 LISTEN_PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 5670
 MIMO_PORT = int(os.environ.get('MIMO_PORT', '5669'))
 MIMO_BIN = os.environ.get('MIMO_BIN', '/usr/local/bin/mimo')
@@ -547,8 +548,8 @@ def status_payload() -> Dict[str, Any]:
         'project_dir': project_dir,
         'project_ok': project_ok,
         'cli_ok': cli_ok,
-        'native_web_url': f'http://{socket.gethostname()}:{MIMO_PORT}/',
-        'native_web_embed_url': f'//{socket.gethostname()}:{MIMO_PORT}/',
+        'native_web_proxy_url': '/mimo-web/',
+        'native_web_note': '官方会话通过 Wrapper 同源代理访问本机 MiMo Web，不依赖固定 IP、主机名或外部端口。',
         'friendly': {
             'service': '运行中' if mimo_open else '未运行',
             'web': '可访问' if mimo_open else '不可访问',
@@ -953,9 +954,87 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return False
         return True
 
+    def _cookie_token(self) -> str:
+        cookie = self.headers.get('Cookie') or ''
+        for part in cookie.split(';'):
+            if '=' not in part:
+                continue
+            k, v = part.strip().split('=', 1)
+            if k == 'mimocode_token':
+                return urllib.parse.unquote(v)
+        return ''
+
+    def _proxy_auth_ok(self) -> bool:
+        return validate_token(self._token()) or validate_token(self._cookie_token())
+
+    def _send_json_with_token_cookie(self, data: Any, token: str, status: int = 200) -> None:
+        body = json.dumps(data, ensure_ascii=False).encode('utf-8')
+        self.send_response(status)
+        self.send_header('Content-Type', 'application/json; charset=utf-8')
+        self.send_header('Cache-Control', 'no-store')
+        self.send_header('Set-Cookie', f'mimocode_token={urllib.parse.quote(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age={7 * 24 * 3600}')
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _clear_token_cookie(self, data: Any, status: int = 200) -> None:
+        body = json.dumps(data, ensure_ascii=False).encode('utf-8')
+        self.send_response(status)
+        self.send_header('Content-Type', 'application/json; charset=utf-8')
+        self.send_header('Cache-Control', 'no-store')
+        self.send_header('Set-Cookie', 'mimocode_token=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0')
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _proxy_mimo_web(self) -> None:
+        if not self._proxy_auth_ok():
+            self.send_response(401)
+            self.send_header('Content-Type', 'text/plain; charset=utf-8')
+            self.end_headers()
+            self.wfile.write('未登录或登录已过期，请返回 MiMo Code 重新登录。'.encode('utf-8'))
+            return
+        start_mimo_web()
+        parsed = urllib.parse.urlparse(self.path)
+        upstream_path = parsed.path[len('/mimo-web'):] or '/'
+        if parsed.query:
+            upstream_path += '?' + parsed.query
+        headers = {k: v for k, v in self.headers.items() if k.lower() not in {'host', 'connection', 'content-length', 'accept-encoding'}}
+        headers['Host'] = f'127.0.0.1:{MIMO_PORT}'
+        body = None
+        if self.command in {'POST', 'PUT', 'PATCH'}:
+            n = int(self.headers.get('Content-Length') or '0')
+            body = self.rfile.read(n) if n > 0 else None
+        conn = None
+        try:
+            conn = http.client.HTTPConnection('127.0.0.1', MIMO_PORT, timeout=30)
+            conn.request(self.command, upstream_path, body=body, headers=headers)
+            resp = conn.getresponse()
+            data = resp.read()
+            self.send_response(resp.status, resp.reason)
+            skip = {'transfer-encoding', 'connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailers', 'upgrade'}
+            for k, v in resp.getheaders():
+                if k.lower() in skip:
+                    continue
+                self.send_header(k, v)
+            self.send_header('X-MiMo-Code-Proxy', 'mimo-web')
+            self.end_headers()
+            self.wfile.write(data)
+        except Exception as e:
+            log(f'mimo web proxy failed: {e}')
+            self.send_response(502)
+            self.send_header('Content-Type', 'text/plain; charset=utf-8')
+            self.end_headers()
+            self.wfile.write(f'官方会话代理失败：{e}'.encode('utf-8'))
+        finally:
+            if conn:
+                conn.close()
+
     def do_GET(self) -> None:
         path = urllib.parse.urlparse(self.path).path
         try:
+            if path.startswith('/mimo-web'):
+                return self._proxy_mimo_web()
             if path == '/api/auth/status':
                 return self._send_json({'setup': is_setup(), 'wrapper_version': WRAPPER_VERSION})
             if not path.startswith('/api/'):
@@ -1009,9 +1088,29 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             log(f'GET {path} failed: {e}')
             return self._send_json({'error': str(e), **user_error(str(e), 1)}, 500)
 
+    def do_PUT(self) -> None:
+        path = urllib.parse.urlparse(self.path).path
+        if path.startswith('/mimo-web'):
+            return self._proxy_mimo_web()
+        return self._send_json({'error': '接口不存在'}, 404)
+
+    def do_PATCH(self) -> None:
+        path = urllib.parse.urlparse(self.path).path
+        if path.startswith('/mimo-web'):
+            return self._proxy_mimo_web()
+        return self._send_json({'error': '接口不存在'}, 404)
+
+    def do_DELETE(self) -> None:
+        path = urllib.parse.urlparse(self.path).path
+        if path.startswith('/mimo-web'):
+            return self._proxy_mimo_web()
+        return self._send_json({'error': '接口不存在'}, 404)
+
     def do_POST(self) -> None:
         path = urllib.parse.urlparse(self.path).path
         try:
+            if path.startswith('/mimo-web'):
+                return self._proxy_mimo_web()
             if path == '/api/auth/setup':
                 data = self._read_json()
                 if is_setup():
@@ -1022,22 +1121,23 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 salt, hashed = pbkdf2_hash(password)
                 json_save(AUTH_PATH, {'salt': salt, 'password_hash': hashed, 'sessions': {}})
                 token = create_session()
-                return self._send_json({'ok': True, 'token': token})
+                return self._send_json_with_token_cookie({'ok': True, 'token': token}, token)
             if path == '/api/auth/login':
                 data = self._read_json()
                 password = str(data.get('password') or '')
                 token = str(data.get('token') or '')
                 if password and verify_password(password):
-                    return self._send_json({'ok': True, 'token': create_session()})
+                    new_token = create_session()
+                    return self._send_json_with_token_cookie({'ok': True, 'token': new_token}, new_token)
                 if token and validate_token(token):
-                    return self._send_json({'ok': True, 'token': token})
+                    return self._send_json_with_token_cookie({'ok': True, 'token': token}, token)
                 return self._send_json({'error': '管理密码错误', 'suggestion': '请确认输入的是初始化时设置的管理密码。'}, 401)
             if not self._require_auth():
                 return
             data = self._read_json()
             if path == '/api/auth/logout':
-                revoke_token(self._token())
-                return self._send_json({'ok': True})
+                revoke_token(self._token() or self._cookie_token())
+                return self._clear_token_cookie({'ok': True})
             if path == '/api/chat/run':
                 return self._send_json(run_chat(data))
             if path == '/api/providers/save':

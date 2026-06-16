@@ -21,7 +21,7 @@
   </section>
 
   <section id="mainView" class="main-view hidden">
-    <header class="topbar">
+    <aside class="sidebar">
       <div class="brand">
         <div class="brand-mark small">Mi</div>
         <div>
@@ -29,21 +29,21 @@
           <div id="statusLine" class="brand-sub">加载中...</div>
         </div>
       </div>
-      <nav class="top-actions">
-        <button class="tab active" data-view="workspace">工作台</button>
-        <button class="tab" data-view="overview">项目概览</button>
-        <button class="tab" data-view="official">官方会话</button>
-        <button class="tab" data-view="providers">模型与服务商</button>
-        <button class="tab" data-view="freeModels">免费模型库</button>
-        <button class="tab" data-view="health">健康检查</button>
-        <button class="tab" data-view="security">安全说明</button>
-        <button class="tab" data-view="backup">配置备份</button>
-        <button class="tab" data-view="logs">日志诊断</button>
-        <button class="tab" data-view="advanced">高级设置</button>
-        <button class="tab hidden" data-view="toolbox">工具箱</button>
-        <button id="logoutBtn" class="btn ghost compact">退出</button>
+      <nav class="side-nav">
+        <button class="tab active" data-view="workspace">🏠 工作台</button>
+        <button class="tab" data-view="official">💬 官方会话</button>
+        <button class="tab" data-view="providers">🧩 模型与服务商</button>
+        <button class="tab" data-view="freeModels">🎁 免费模型库</button>
+        <button class="tab" data-view="overview">📁 项目概览</button>
+        <button class="tab" data-view="health">🩺 健康检查</button>
+        <button class="tab" data-view="backup">🧰 配置备份</button>
+        <button class="tab" data-view="logs">📜 日志诊断</button>
+        <button class="tab" data-view="security">🛡️ 安全说明</button>
+        <button class="tab" data-view="advanced">⚙️ 高级设置</button>
+        <button class="tab hidden" data-view="toolbox">🧪 工具箱</button>
       </nav>
-    </header>
+      <button id="logoutBtn" class="btn ghost compact logout">退出登录</button>
+    </aside>
     <main id="content" class="content"></main>
   </section>
 </div>

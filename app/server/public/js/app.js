@@ -1,4 +1,4 @@
-/* MiMo Code fnOS App v0.11.1 */
+/* MiMo Code fnOS App v0.11.2 */
 const $ = s => document.querySelector(s);
 const $$ = s => Array.from(document.querySelectorAll(s));
 const state = { token: localStorage.getItem('mimocode_token') || '', setup: false, status: null, providers: [], presets: [], config: {}, view: 'workspace', sessions: [] };
@@ -79,9 +79,8 @@ function statusCards(){ const f=state.status?.friendly||{}; return `<div class="
 </div>`; }
 function card(k,v,type=''){ return `<div class="stat ${type}"><div class="k">${esc(k)}</div><div class="v">${esc(v)}</div></div>`; }
 function providerGuide(){
-  if(state.providers.length || state.config.default_model) return '';
   const opts=state.presets.map(p=>`<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('');
-  return `<section class="panel guide"><div class="panel-head"><div><h2>首次配置向导</h2><p>推荐先用 MiMo 官方默认模型 <b>mimo/mimo-auto</b>，限时免费；第三方服务商再填写 Key。</p></div></div>
+  return `<section class="panel guide"><div class="panel-head"><div><h2>模型配置</h2><p>这里始终显示当前待保存配置。免费模型库点“填入配置”后，会自动回到这里；无需 Key 的模型可直接保存，需要 Key 的平台再填写 API Key。</p></div></div>
     <div class="form three">
       <label>服务商<select id="guidePreset">${opts}</select></label>
       <label>接口地址 Base URL<input id="guideBase" class="input" placeholder="官方模型无需填写"></label>
@@ -89,7 +88,7 @@ function providerGuide(){
       <label class="span2">API Key<input id="guideKey" class="input" type="password" placeholder="官方模型无需填写；第三方 Key 只保存在本机 NAS"></label>
       <label>显示名称<input id="guideName" class="input" placeholder="服务商显示名称"></label>
     </div>
-    <div class="actions"><button class="btn primary" onclick="saveGuideProvider()">保存并开始使用</button><span id="guideHint" class="hint"></span></div>
+    <div class="actions"><button class="btn primary" onclick="saveGuideProvider()">保存为默认配置</button><button class="btn ghost" onclick="navigate('freeModels')">去免费模型库选择</button><span id="guideHint" class="hint"></span></div>
   </section>`;
 }
 function fillPreset(){
@@ -112,13 +111,13 @@ async function saveGuideProvider(){
   const model=official?$('#guideModelSelect').value:$('#guideModel').value;
   try{
     await api('providers/save',{method:'POST',body:JSON.stringify({id,name:$('#guideName').value||p.name,base_url:$('#guideBase').value,api_key:$('#guideKey').value,model})});
-    toast('已保存配置'); await refreshAll(); renderWorkspace();
+    toast('已保存配置，已设为默认模型'); await refreshAll(); renderProviders();
   }catch(e){toast(e.data?.suggestion||e.message,'err');}
 }
 
 function renderWorkspace(){
   const model=state.config.default_model||'mimo/mimo-auto';
-  const nativeUrl=`${location.protocol}//${location.hostname}:5669/`;
+  const nativeUrl=`${location.origin}/mimo-web/`;
   $('#content').innerHTML=`${providerGuide()}<section class="panel hero-panel"><div class="hero-layout"><div><h1>MiMo Code 工作台</h1><p>工作台负责状态、模型、诊断和配置。真正聊天进入独立「官方会话」页面，由官方 mimo web 接管。</p><div class="hero-actions"><button class="btn primary" onclick="navigate('official')">进入官方会话</button><button class="btn ghost" onclick="openNativeWeb()">新窗口打开</button><button class="btn ghost" onclick="copyText('${esc(nativeUrl)}')">复制会话地址</button></div></div><div class="hero-status">${statusCards()}</div></div></section>
   <div class="dashboard-grid">
     <section class="panel"><h3>项目概览</h3><p class="hint">查看当前项目目录、文件类型和识别标记。</p><button class="btn ghost" onclick="navigate('overview')">打开项目概览</button></section>
@@ -136,7 +135,7 @@ async function renderOverview(){
   try{ const r=await api('overview'); $('#overviewBox').innerHTML=`<div class="status-grid">${card('目录',r.project_dir,r.ok?'ok':'warn')}${card('文件扫描',String(r.files_scanned||0),r.ok?'ok':'warn')}${card('目录扫描',String(r.dirs_scanned||0),r.ok?'ok':'warn')}${card('扫描截断',r.truncated?'是':'否',r.truncated?'warn':'ok')}</div><h3>项目标记</h3><p>${(r.markers||[]).map(x=>`<span class="pill">${esc(x)}</span>`).join('')||'未识别到常见项目标记'}</p><h3>文件类型 Top 10</h3><div class="provider-list">${(r.top_extensions||[]).map(x=>`<div class="provider-card"><b>${esc(x[0])}</b><p>${esc(x[1])} 个文件</p></div>`).join('')||'<div class="empty">暂无数据</div>'}</div>`; }catch(e){ $('#overviewBox').textContent=e.message; }
 }
 function renderOfficialChat(){
-  const embedUrl=`${location.protocol}//${location.hostname}:5669/`;
+  const embedUrl='/mimo-web/';
   const content=$('#content');
   content.innerHTML='';
   content.classList.add('official-content');
@@ -144,13 +143,13 @@ function renderOfficialChat(){
   iframe.id='nativeFrame'; iframe.className='official-native-frame'; iframe.src=embedUrl; iframe.title='MiMo 官方会话';
   content.appendChild(iframe);
 }
-function openNativeWeb(){ window.open(`${location.protocol}//${location.hostname}:5669/`,'_blank'); }
+function openNativeWeb(){ window.open('/mimo-web/','_blank'); }
 function reloadNativeFrame(){ const f=$('#nativeFrame'); if(f) f.src=f.src; }
 
 async function enableToolboxAndOpenCli(){ if(!state.config.toolbox_enabled){ await api('config',{method:'POST',body:JSON.stringify({toolbox_enabled:true})}); await refreshAll(); } navigate('toolbox'); setTimeout(toolCommand,80); }
 function modelBadge(m){ if(m.free) return '<span class="pill free">免费/限免</span>'; if(m.badge) return `<span class="pill">${esc(m.badge)}</span>`; return ''; }
 async function renderProviders(){
-  $('#content').innerHTML=`<section class="panel"><div class="panel-head"><div><h2>模型与服务商</h2><p>官方模型按分组展示；免费/限时免费模型会打标签。第三方服务商需要填写 API Key。</p></div><button class="btn ghost" onclick="refreshAll().then(renderProviders)">刷新</button></div>${providerGuide()}<div id="modelGroups" class="output">加载模型中...</div><h3>已保存 Provider</h3><div class="provider-list">${state.providers.map(p=>`<div class="provider-card"><h3>${esc(p.name)}</h3><p>模型：${esc(p.model||'-')}</p><p>Key：${p.has_key?'已保存':'未保存/无需 Key'}</p></div>`).join('')||'<div class="empty">还没有第三方 Provider；官方模型可直接使用。</div>'}</div></section>`;
+  $('#content').innerHTML=`<section class="panel"><div class="panel-head"><div><h2>模型与服务商</h2><p>选择模型、填写 Key、保存默认配置。官方模型和部分免费 Provider 可不填 Key。</p></div><button class="btn ghost" onclick="refreshAll().then(renderProviders)">刷新</button></div>${providerGuide()}<div id="modelGroups" class="output">加载模型中...</div><h3>已保存 Provider</h3><div class="provider-list">${state.providers.map(p=>`<div class="provider-card"><h3>${esc(p.name)}</h3><p>模型：${esc(p.model||'-')}</p><p>Key：${p.has_key?'已保存':'未保存/无需 Key'}</p></div>`).join('')||'<div class="empty">还没有第三方 Provider；官方模型可直接使用。</div>'}</div></section>`;
   fillPreset();
   try{
     const r=await api('models?provider=mimo_official');
@@ -183,7 +182,8 @@ function useFreeModel(raw){
     if($('#guideModel')) { $('#guideModel').classList.remove('hidden'); $('#guideModel').value=m.model||''; }
     if($('#guideModelSelect')) $('#guideModelSelect').classList.add('hidden');
     if($('#guideKey')) { $('#guideKey').disabled=!m.requires_key; $('#guideKey').placeholder=m.requires_key?'填写该平台 API Key':'无需 API Key'; }
-    toast('已填入免费模型配置，请补 Key 后保存');
+    toast(m.requires_key?'已填入配置，请填写 API Key 后保存':'已填入配置，该模型无需 Key，可直接保存');
+      const hint=$('#guideHint'); if(hint) hint.textContent=m.requires_key?'需要到对应平台申请 API Key，填入后点保存。':'该 Provider 标记为无需 API Key，直接点保存为默认配置。';
   },80);
 }
 async function renderHealth(){
