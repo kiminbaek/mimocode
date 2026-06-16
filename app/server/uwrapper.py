@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""MiMo Code fnOS App Wrapper v0.11.3
+"""MiMo Code fnOS App Wrapper v0.11.4
 
 User-first wrapper around the official `mimo` binary.
 - opens to the main conversation workspace
@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 APP_NAME = 'mimocode'
-WRAPPER_VERSION = '0.11.3'
+WRAPPER_VERSION = '0.11.4'
 LISTEN_PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 5670
 MIMO_PORT = int(os.environ.get('MIMO_PORT', '5669'))
 MIMO_BIN = os.environ.get('MIMO_BIN', '/usr/local/bin/mimo')
@@ -50,6 +50,10 @@ MIMO_PID_PATH = VAR_DIR / 'mimo.pid'
 SESSIONS_PATH = VAR_DIR / 'sessions.json'
 DIAG_PATH = VAR_DIR / 'diagnostic_bundle.json'
 BACKUP_DIR = VAR_DIR / 'config_backups'
+MIMO_WEB_ROOT_PROXY_PREFIXES = (
+    '/provider', '/project', '/path', '/agent', '/config', '/session',
+    '/command', '/question', '/permission', '/vcs', '/mcp', '/global',
+)
 
 SAFE_TEXT_LIMIT = 160 * 1024
 DEFAULT_CONFIG: Dict[str, Any] = {
@@ -497,11 +501,15 @@ def save_provider(payload: Dict[str, Any]) -> Dict[str, Any]:
         return {'ok': True, 'provider': {'id': 'mimo_official', 'name': 'MiMo 官方模型', 'model': model, 'has_key': False, 'official': True}, 'config': cfg}
     if not base_url:
         raise ValueError('请填写接口地址 Base URL')
-    if not api_key:
+    free_no_key = (not api_key) and provider_id in {'opencode', 'kilo'}
+    if not api_key and not free_no_key:
         raise ValueError('请填写 API Key')
     data = read_mimo_auth()
     providers = data.get('providers') if isinstance(data.get('providers'), list) else []
     new_item = {'id': provider_id, 'name': name, 'baseURL': base_url, 'apiKey': api_key, 'model': model}
+    if free_no_key:
+        new_item['requireApiKey'] = False
+        new_item['isFreeTier'] = True
     replaced = False
     out = []
     for p in providers:
@@ -967,6 +975,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def _proxy_auth_ok(self) -> bool:
         return validate_token(self._token()) or validate_token(self._cookie_token())
 
+    def _should_proxy_mimo_root(self, path: str) -> bool:
+        return any(path == p or path.startswith(p + '/') for p in MIMO_WEB_ROOT_PROXY_PREFIXES)
+
     def _send_json_with_token_cookie(self, data: Any, token: str, status: int = 200) -> None:
         body = json.dumps(data, ensure_ascii=False).encode('utf-8')
         self.send_response(status)
@@ -996,7 +1007,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return
         start_mimo_web()
         parsed = urllib.parse.urlparse(self.path)
-        upstream_path = parsed.path[len('/mimo-web'):] or '/'
+        if parsed.path.startswith('/mimo-web'):
+            upstream_path = parsed.path[len('/mimo-web'):] or '/'
+        else:
+            upstream_path = parsed.path or '/'
         if parsed.query:
             upstream_path += '?' + parsed.query
         headers = {k: v for k, v in self.headers.items() if k.lower() not in {'host', 'connection', 'content-length', 'accept-encoding'}}
@@ -1046,7 +1060,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self) -> None:
         path = urllib.parse.urlparse(self.path).path
         try:
-            if path.startswith('/mimo-web'):
+            if path.startswith('/mimo-web') or self._should_proxy_mimo_root(path):
                 return self._proxy_mimo_web()
             if path == '/api/auth/status':
                 return self._send_json({'setup': is_setup(), 'wrapper_version': WRAPPER_VERSION})
@@ -1103,26 +1117,26 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     def do_PUT(self) -> None:
         path = urllib.parse.urlparse(self.path).path
-        if path.startswith('/mimo-web'):
+        if path.startswith('/mimo-web') or self._should_proxy_mimo_root(path):
             return self._proxy_mimo_web()
         return self._send_json({'error': '接口不存在'}, 404)
 
     def do_PATCH(self) -> None:
         path = urllib.parse.urlparse(self.path).path
-        if path.startswith('/mimo-web'):
+        if path.startswith('/mimo-web') or self._should_proxy_mimo_root(path):
             return self._proxy_mimo_web()
         return self._send_json({'error': '接口不存在'}, 404)
 
     def do_DELETE(self) -> None:
         path = urllib.parse.urlparse(self.path).path
-        if path.startswith('/mimo-web'):
+        if path.startswith('/mimo-web') or self._should_proxy_mimo_root(path):
             return self._proxy_mimo_web()
         return self._send_json({'error': '接口不存在'}, 404)
 
     def do_POST(self) -> None:
         path = urllib.parse.urlparse(self.path).path
         try:
-            if path.startswith('/mimo-web'):
+            if path.startswith('/mimo-web') or self._should_proxy_mimo_root(path):
                 return self._proxy_mimo_web()
             if path == '/api/auth/setup':
                 data = self._read_json()
@@ -1148,6 +1162,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             if not self._require_auth():
                 return
             data = self._read_json()
+            if path == '/api/auth/session-cookie':
+                token = self._token() or self._cookie_token()
+                return self._send_json_with_token_cookie({'ok': True}, token)
             if path == '/api/auth/logout':
                 revoke_token(self._token() or self._cookie_token())
                 return self._clear_token_cookie({'ok': True})

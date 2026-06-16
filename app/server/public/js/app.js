@@ -1,4 +1,4 @@
-/* MiMo Code fnOS App v0.11.3 */
+/* MiMo Code fnOS App v0.11.4 */
 const $ = s => document.querySelector(s);
 const $$ = s => Array.from(document.querySelectorAll(s));
 const state = { token: localStorage.getItem('mimocode_token') || '', setup: false, status: null, providers: [], presets: [], config: {}, view: 'workspace', sessions: [] };
@@ -78,6 +78,7 @@ function statusCards(){ const f=state.status?.friendly||{}; return `<div class="
   ${card('CLI',f.cli,state.status?.cli_ok?'ok':'warn')}
 </div>`; }
 function card(k,v,type=''){ return `<div class="stat ${type}"><div class="k">${esc(k)}</div><div class="v">${esc(v)}</div></div>`; }
+function runtimeCards(){ const st=state.status||{}, f=st.friendly||{}; const uptime=st.uptime_sec?Math.floor(st.uptime_sec/60)+' 分钟':'-'; return `${card('Wrapper','运行中 · '+uptime,'ok')}${card('官方 Web',f.web||'-',st.mimo_open?'ok':'warn')}${card('Provider',f.provider||'-',st.provider_configured?'ok':'warn')}${card('CLI',f.cli||'-',st.cli_ok?'ok':'warn')}${card('服务端口','Wrapper '+(st.wrapper_port||'-')+' / Web '+(st.mimo_port||'-'),'ok')}${card('当前模型',st.default_model||'未选择',st.default_model?'ok':'warn')}`; }
 function providerGuide(){
   const opts=state.presets.map(p=>`<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('');
   return `<section class="panel guide"><div class="panel-head"><div><h2>模型配置</h2><p>这里始终显示当前待保存配置。免费模型库点“填入配置”后，会自动回到这里；无需 Key 的模型可直接保存，需要 Key 的平台再填写 API Key。</p></div></div>
@@ -119,6 +120,7 @@ function renderWorkspace(){
   const model=state.config.default_model||'mimo/mimo-auto';
   const nativeUrl=`${location.origin}/mimo-web/`;
   $('#content').innerHTML=`<section class="panel hero-panel"><div class="hero-layout"><div><h1>MiMo Code 工作台</h1><p>工作台负责状态、模型、诊断和配置。真正聊天进入独立「官方会话」页面，由官方 mimo web 接管。</p><div class="hero-actions"><button class="btn primary" onclick="navigate('official')">进入官方会话</button><button class="btn ghost" onclick="openNativeWeb()">新窗口打开</button><button class="btn ghost" onclick="copyText('${esc(nativeUrl)}')">复制会话地址</button></div></div><div class="hero-status">${statusCards()}</div></div></section>
+  <section class="panel runtime-panel"><div class="panel-head"><div><h2>运行状态</h2><p>图形化展示 Wrapper、官方 Web、Provider 和 CLI 状态。</p></div><button class="btn ghost" onclick="refreshAll().then(renderWorkspace)">刷新状态</button></div><div class="status-grid">${runtimeCards()}</div></section>
   <div class="dashboard-grid">
     <section class="panel"><h3>项目概览</h3><p class="hint">查看当前项目目录、文件类型和识别标记。</p><button class="btn ghost" onclick="navigate('overview')">打开项目概览</button></section>
     <section class="panel"><h3>当前模型</h3><p><code>${esc(model)}</code></p><p class="hint">需要切换模型或填写 Key 时进入模型与服务商。</p><button class="btn ghost" onclick="navigate('providers')">配置模型</button></section>
@@ -134,16 +136,18 @@ async function renderOverview(){
   $('#content').innerHTML='<section class="panel"><h2>项目概览</h2><div id="overviewBox" class="output">加载中...</div></section>';
   try{ const r=await api('overview'); $('#overviewBox').innerHTML=`<div class="status-grid">${card('目录',r.project_dir,r.ok?'ok':'warn')}${card('文件扫描',String(r.files_scanned||0),r.ok?'ok':'warn')}${card('目录扫描',String(r.dirs_scanned||0),r.ok?'ok':'warn')}${card('扫描截断',r.truncated?'是':'否',r.truncated?'warn':'ok')}</div><h3>项目标记</h3><p>${(r.markers||[]).map(x=>`<span class="pill">${esc(x)}</span>`).join('')||'未识别到常见项目标记'}</p><h3>文件类型 Top 10</h3><div class="provider-list">${(r.top_extensions||[]).map(x=>`<div class="provider-card"><b>${esc(x[0])}</b><p>${esc(x[1])} 个文件</p></div>`).join('')||'<div class="empty">暂无数据</div>'}</div>`; }catch(e){ $('#overviewBox').textContent=e.message; }
 }
-function renderOfficialChat(){
+async function renderOfficialChat(){
   const embedUrl='/mimo-web/';
   const content=$('#content');
+  content.innerHTML='<section class="panel"><h2>官方会话</h2><p class="hint">正在准备官方会话登录态...</p></section>';
+  try{ await api('auth/session-cookie',{method:'POST',body:JSON.stringify({})}); }catch(e){ toast('官方会话登录态刷新失败：'+e.message,'err'); }
   content.innerHTML='';
   content.classList.add('official-content');
   const iframe=document.createElement('iframe');
   iframe.id='nativeFrame'; iframe.className='official-native-frame'; iframe.src=embedUrl; iframe.title='MiMo 官方会话';
   content.appendChild(iframe);
 }
-function openNativeWeb(){ window.open('/mimo-web/','_blank'); }
+async function openNativeWeb(){ try{ await api('auth/session-cookie',{method:'POST',body:JSON.stringify({})}); }catch(e){ toast('官方会话登录态刷新失败：'+e.message,'err'); } window.open('/mimo-web/','_blank'); }
 function reloadNativeFrame(){ const f=$('#nativeFrame'); if(f) f.src=f.src; }
 
 async function enableToolboxAndOpenCli(){ if(!state.config.toolbox_enabled){ await api('config',{method:'POST',body:JSON.stringify({toolbox_enabled:true})}); await refreshAll(); } navigate('toolbox'); setTimeout(toolCommand,80); }
@@ -173,7 +177,7 @@ function useFreeModel(raw){
   setTimeout(()=>{
     const preset=$('#guidePreset');
     if(preset){
-      const known=['mimo_official','deepseek','siliconflow'];
+      const known=['mimo_official','deepseek','siliconflow','opencode','kilo'];
       preset.value=known.includes(m.provider_id)?m.provider_id:'custom';
       fillPreset();
     }
