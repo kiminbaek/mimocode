@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 APP_NAME = 'mimocode'
-WRAPPER_VERSION = '0.11.25'
+WRAPPER_VERSION = '0.11.26'
 LISTEN_PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 5670
 MIMO_PORT = int(os.environ.get('MIMO_PORT', '5669'))
 MIMO_BIN = os.environ.get('MIMO_BIN', '/usr/local/bin/mimo')
@@ -445,12 +445,17 @@ def start_mimo_web() -> bool:
     log(f'starting mimo web on 0.0.0.0:{MIMO_PORT} with MIMOCODE_HOME={MIMO_HOME}')
     try:
         with MIMO_LOG_PATH.open('ab') as logf:
+            # Start mimo web with cwd = mimo binary directory
+            # Newer bun-bundled mimo extracts web assets to cwd/web
+            # So we set cwd to /var/apps/mimocode/target/server, avoids /web permission issues
+            mimo_cwd = Path(MIMO_BIN).parent
             proc = subprocess.Popen(
                 [MIMO_BIN, 'web', '--hostname', '0.0.0.0', '--port', str(MIMO_PORT)],
                 stdout=logf,
                 stderr=subprocess.STDOUT,
                 start_new_session=True,
                 env=make_env(),
+                cwd=mimo_cwd,
             )
         MIMO_PID_PATH.write_text(str(proc.pid))
         for _ in range(80):
