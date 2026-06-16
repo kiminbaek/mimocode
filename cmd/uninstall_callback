@@ -1,5 +1,5 @@
 #!/bin/bash
-# MiMo Code uninstall callback v0.8.0
+# MiMo Code uninstall callback v0.11.6
 
 LOG_FILE="${TRIM_PKGVAR}/uninstall.log"
 mkdir -p "${TRIM_PKGVAR}" 2>/dev/null || true
@@ -31,16 +31,19 @@ fi
 rm -rf "${TRIM_APPDEST}/bin" "${TRIM_APPDEST}/server" 2>/dev/null || true
 log_msg "target binary/server removed"
 
-rm -rf "${TRIM_PKGVAR}"/* 2>/dev/null || true
-log_msg "runtime var cleaned"
+DELETE_DATA="${wizard_delete_data:-false}"
+KEEP_CONFIG="${wizard_keep_config:-true}"  # backward compatibility with older wizard
 
-KEEP_CONFIG="${wizard_keep_config:-true}"
-if [ "$KEEP_CONFIG" != "true" ]; then
+if [ "$DELETE_DATA" = "true" ] || [ "$KEEP_CONFIG" != "true" ]; then
+    rm -rf "${TRIM_PKGVAR}"/* 2>/dev/null || true
     rm -rf "${TRIM_PKGETC}" 2>/dev/null || true
-    rm -rf "/root/.local/share/mimocode" 2>/dev/null || true
-    log_msg "config removed"
+    rm -rf "${TRIM_PKGHOME}" 2>/dev/null || true
+    # Legacy profile used before v0.11.6. New profile is under ${TRIM_PKGVAR}/mimo_home.
+    rm -rf "/root/.config/mimocode" "/root/.local/share/mimocode" "/root/.local/state/mimocode" "/root/.cache/mimocode" 2>/dev/null || true
+    log_msg "config and runtime data removed by wizard choice"
 else
-    log_msg "config kept: ${TRIM_PKGETC}"
+    rm -f "${TRIM_PKGVAR}/wrapper.pid" "${TRIM_PKGVAR}/mimo.pid" 2>/dev/null || true
+    log_msg "config and data kept: ${TRIM_PKGETC}, ${TRIM_PKGVAR}, ${TRIM_PKGHOME}"
 fi
 
 exit 0

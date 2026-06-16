@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""MiMo Code fnOS App Wrapper v0.11.5
+"""MiMo Code fnOS App Wrapper v0.11.6
 
 User-first wrapper around the official `mimo` binary.
 - opens to the main conversation workspace
@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 APP_NAME = 'mimocode'
-WRAPPER_VERSION = '0.11.5'
+WRAPPER_VERSION = '0.11.6'
 LISTEN_PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 5670
 MIMO_PORT = int(os.environ.get('MIMO_PORT', '5669'))
 MIMO_BIN = os.environ.get('MIMO_BIN', '/usr/local/bin/mimo')
@@ -43,7 +43,9 @@ ETC_DIR = Path(os.environ.get('MIMOCODE_ETC_DIR', '/var/apps/mimocode/etc'))
 PUBLIC_DIR = Path(__file__).resolve().parent / 'public'
 AUTH_PATH = ETC_DIR / 'wrapper_auth.json'
 CONFIG_PATH = ETC_DIR / 'wrapper_config.json'
-MIMO_AUTH_PATH = Path(os.environ.get('MIMOCODE_AUTH_PATH', str(VAR_DIR / 'auth.json')))
+MIMO_HOME = Path(os.environ.get('MIMOCODE_HOME_DIR', str(VAR_DIR / 'mimo_home')))
+MIMO_CONFIG_PATH = MIMO_HOME / 'config' / 'config.json'
+MIMO_AUTH_PATH = Path(os.environ.get('MIMOCODE_AUTH_PATH', str(MIMO_HOME / 'data' / 'auth.json')))
 MIMO_LOG_PATH = VAR_DIR / 'mimo.log'
 WRAPPER_LOG_PATH = VAR_DIR / 'wrapper.log'
 MIMO_PID_PATH = VAR_DIR / 'mimo.pid'
@@ -291,9 +293,11 @@ def revoke_token(token: str) -> None:
 
 def make_env() -> Dict[str, str]:
     env = os.environ.copy()
-    env['HOME'] = '/root'
-    env['MIMOCODE_VAR_DIR'] = str(VAR_DIR)
-    env['MIMOCODE_ETC_DIR'] = str(ETC_DIR)
+    # Do not force HOME when MIMOCODE_HOME is set. MiMo Code v0.2x returns
+    # HTTP 500 on /config when HOME=/root and MIMOCODE_HOME points to an
+    # isolated profile. MIMOCODE_HOME is the official single profile root.
+    env['MIMOCODE_HOME'] = str(MIMO_HOME)
+    env['MIMOCODE_DISABLE_AUTOUPDATE'] = 'true'
     return env
 
 
@@ -309,6 +313,106 @@ def run_cmd(args: List[str], timeout: int = 30, cwd: Optional[str] = None) -> Tu
 
 def run_mimo(*args: str, timeout: int = 30, cwd: Optional[str] = None) -> Tuple[int, str, str]:
     return run_cmd([MIMO_BIN] + list(args), timeout=timeout, cwd=cwd)
+
+def ensure_mimo_home() -> None:
+    for sub in ('config', 'data', 'state', 'cache'):
+        (MIMO_HOME / sub).mkdir(parents=True, exist_ok=True)
+
+
+def official_provider_id(provider_id: str) -> str:
+    """Use a custom provider id so MiMo's managed disabled_providers cannot hide it.
+
+    The official managed config disables built-in "opencode". Using fnos_<id>
+    makes the configured free provider visible in /provider and /models.
+    """
+    base = re.sub(r'[^a-zA-Z0-9_]+', '_', str(provider_id or 'custom').strip().lower()).strip('_') or 'custom'
+    if base.startswith('fnos_'):
+        return base[:64]
+    return ('fnos_' + base)[:64]
+
+
+def read_official_config() -> Dict[str, Any]:
+    ensure_mimo_home()
+    data = json_load(MIMO_CONFIG_PATH, {})
+    return data if isinstance(data, dict) else {}
+
+
+def write_official_config(data: Dict[str, Any]) -> None:
+    ensure_mimo_home()
+    json_save(MIMO_CONFIG_PATH, data, 0o600)
+
+
+def sync_official_provider(provider_id: str, name: str, base_url: str, api_key: str, model: str) -> Dict[str, Any]:
+    """Synchronize Wrapper provider settings into official MiMo config.json."""
+    ensure_mimo_home()
+    official_id = official_provider_id(provider_id)
+    cfg = read_official_config()
+    provider = cfg.get('provider') if isinstance(cfg.get('provider'), dict) else {}
+    models = {}
+    if model:
+        models[model] = {
+            'name': model,
+            'temperature': True,
+            'tool_call': True,
+        }
+    provider[official_id] = {
+        'npm': '@ai-sdk/openai-compatible',
+        'name': name or official_id,
+        'options': {
+            'baseURL': base_url,
+            'apiKey': api_key or '',
+        },
+        'models': models,
+    }
+    cfg['provider'] = provider
+    if model:
+        cfg['model'] = f'{official_id}/{model}'
+        cfg.setdefault('small_model', f'{official_id}/{model}')
+    # Keep MiMo's known broken/blocked built-in opencode ids disabled, but never
+    # disable our fnos_* custom ids.
+    disabled = cfg.get('disabled_providers') if isinstance(cfg.get('disabled_providers'), list) else []
+    disabled_out = []
+    for item in list(disabled) + ['opencode', 'opencode-go']:
+        if isinstance(item, str) and item not in disabled_out and item != official_id:
+            disabled_out.append(item)
+    cfg['disabled_providers'] = disabled_out
+    write_official_config(cfg)
+    return {'id': official_id, 'model': f'{official_id}/{model}' if model else '', 'path': str(MIMO_CONFIG_PATH)}
+
+
+def sync_official_model(model: str) -> Dict[str, Any]:
+    """Set an official MiMo model in the official config without touching providers."""
+    ensure_mimo_home()
+    cfg = read_official_config()
+    if model:
+        cfg['model'] = model
+        cfg.setdefault('small_model', model)
+    write_official_config(cfg)
+    return {'id': model.split('/', 1)[0] if '/' in model else '', 'model': model, 'path': str(MIMO_CONFIG_PATH)}
+
+
+def official_config_ready(timeout: float = 20.0) -> bool:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            conn = http.client.HTTPConnection('127.0.0.1', MIMO_PORT, timeout=2)
+            conn.request('GET', '/config', headers={'Accept': 'application/json'})
+            resp = conn.getresponse()
+            body = resp.read(200)
+            conn.close()
+            if resp.status == 200 and body.strip().startswith(b'{'):
+                return True
+        except Exception:
+            pass
+        time.sleep(0.5)
+    return False
+
+
+def restart_mimo_web() -> bool:
+    stop_mimo_web()
+    started = start_mimo_web()
+    return bool(started and official_config_ready(25.0))
+
 
 
 def port_open(port: int) -> bool:
@@ -332,11 +436,12 @@ def get_mimo_version() -> str:
 
 
 def start_mimo_web() -> bool:
+    ensure_mimo_home()
     if port_open(MIMO_PORT):
         return True
     if read_pid(MIMO_PID_PATH):
         return True
-    log(f'starting mimo web on 0.0.0.0:{MIMO_PORT}')
+    log(f'starting mimo web on 0.0.0.0:{MIMO_PORT} with MIMOCODE_HOME={MIMO_HOME}')
     try:
         with MIMO_LOG_PATH.open('ab') as logf:
             proc = subprocess.Popen(
@@ -347,13 +452,13 @@ def start_mimo_web() -> bool:
                 env=make_env(),
             )
         MIMO_PID_PATH.write_text(str(proc.pid))
-        for _ in range(30):
+        for _ in range(80):
             if port_open(MIMO_PORT):
                 return True
             if proc.poll() is not None:
                 log(f'mimo web exited early: rc={proc.returncode}')
                 return False
-            time.sleep(0.4)
+            time.sleep(0.5)
     except Exception as e:
         log(f'start_mimo_web failed: {e}')
     return port_open(MIMO_PORT)
@@ -503,8 +608,11 @@ def save_provider(payload: Dict[str, Any]) -> Dict[str, Any]:
         raise ValueError('请填写服务商名称')
     if official:
         model = model or 'mimo/mimo-auto'
+        official_sync = sync_official_model(model)
         cfg = save_config_patch({'default_provider': 'mimo_official', 'default_model': model})
-        return {'ok': True, 'provider': {'id': 'mimo_official', 'name': 'MiMo 官方模型', 'model': model, 'has_key': False, 'official': True}, 'config': cfg}
+        official_ready = restart_mimo_web()
+        official_sync['ready'] = official_ready
+        return {'ok': True, 'provider': {'id': 'mimo_official', 'name': 'MiMo 官方模型', 'model': model, 'has_key': False, 'official': True, 'official_id': official_sync.get('id'), 'official_model': official_sync.get('model')}, 'official': official_sync, 'config': cfg}
     if not base_url:
         raise ValueError('请填写接口地址 Base URL')
     preset = next((p for p in PROVIDER_PRESETS if p.get('id') == provider_id), {})
@@ -528,8 +636,14 @@ def save_provider(payload: Dict[str, Any]) -> Dict[str, Any]:
         out.append(new_item)
     data['providers'] = out
     write_mimo_auth(data)
+    official_sync = sync_official_provider(provider_id, name, base_url, api_key, model)
     cfg = save_config_patch({'default_provider': provider_id, 'default_model': model})
-    return {'ok': True, 'provider': provider_items({'providers': [new_item]})[0], 'config': cfg}
+    official_ready = restart_mimo_web()
+    official_sync['ready'] = official_ready
+    item = provider_items({'providers': [new_item]})[0]
+    item['official_id'] = official_sync.get('id')
+    item['official_model'] = official_sync.get('model')
+    return {'ok': True, 'provider': item, 'official': official_sync, 'config': cfg}
 
 def delete_provider(pid: str) -> bool:
     data = read_mimo_auth()
@@ -836,6 +950,8 @@ def diagnostic_bundle() -> Dict[str, Any]:
             'mimo_bin': {'path': MIMO_BIN, 'exists': Path(MIMO_BIN).exists()},
             'public': {'path': str(PUBLIC_DIR), 'exists': PUBLIC_DIR.exists()},
             'auth': {'path': str(MIMO_AUTH_PATH), 'exists': MIMO_AUTH_PATH.exists()},
+            'official_config': {'path': str(MIMO_CONFIG_PATH), 'exists': MIMO_CONFIG_PATH.exists()},
+            'official_home': {'path': str(MIMO_HOME), 'exists': MIMO_HOME.exists()},
             'config': {'path': str(CONFIG_PATH), 'exists': CONFIG_PATH.exists()},
         }
     }

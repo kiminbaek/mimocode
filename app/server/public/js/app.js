@@ -1,4 +1,4 @@
-/* MiMo Code fnOS App v0.11.5 */
+/* MiMo Code fnOS App v0.11.6 */
 const $ = s => document.querySelector(s);
 const $$ = s => Array.from(document.querySelectorAll(s));
 const state = { token: localStorage.getItem('mimocode_token') || '', setup: false, status: null, providers: [], presets: [], config: {}, view: 'workspace', sessions: [] };

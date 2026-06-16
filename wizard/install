@@ -1,0 +1,41 @@
+[
+  {
+    "stepTitle": "欢迎使用 MiMo Code",
+    "items": [
+      {
+        "type": "tips",
+        "helpText": "MiMo Code 是小米官方 AI 编程助手。本 fnOS 应用将官方 MiMo Code 二进制封装为本地 Web 工作台，方便在飞牛 NAS 上启动、配置和诊断。"
+      },
+      {
+        "type": "tips",
+        "helpText": "官方会话由内置 <b>mimo web</b> 提供；Wrapper 只负责本地管理界面、配置同步、日志和状态展示。"
+      },
+      {
+        "type": "tips",
+        "helpText": "请确认：第三方 Provider、模型服务和 API Key 的实际使用条款、费用、限额与隐私政策，以对应服务商和 MiMo 官方实时政策为准。"
+      }
+    ]
+  },
+  {
+    "stepTitle": "数据与隐私说明",
+    "items": [
+      {
+        "type": "tips",
+        "helpText": "应用会在本机保存 Wrapper 登录信息、Provider 配置、官方 MiMo profile、运行日志和诊断信息。API Key 会以本地文件形式保存，请仅在可信设备上使用。"
+      },
+      {
+        "type": "tips",
+        "helpText": "应用不硬编码设备 IP/主机名；官方会话通过本地同源代理访问。卸载时可选择保留或清除配置与数据。"
+      },
+      {
+        "type": "switch",
+        "field": "wizard_accept_terms",
+        "label": "我已阅读并同意上述使用条款与数据说明",
+        "initValue": "true",
+        "rules": [
+          {"required": true, "message": "请确认使用条款与数据说明"}
+        ]
+      }
+    ]
+  }
+]
