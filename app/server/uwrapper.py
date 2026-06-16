@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 APP_NAME = 'mimocode'
-WRAPPER_VERSION = '0.11.11'
+WRAPPER_VERSION = '0.11.12'
 LISTEN_PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 5670
 MIMO_PORT = int(os.environ.get('MIMO_PORT', '5669'))
 MIMO_BIN = os.environ.get('MIMO_BIN', '/usr/local/bin/mimo')
@@ -1446,22 +1446,38 @@ def main() -> None:
     threading.Thread(target=serve_httpd, args=(httpd_tcp,), daemon=True).start()
     
     # Start Unix socket server for fnOS unified gateway (non-LAN access via official domain)
-    gateway_socket = Path(os.environ.get('TRIM_APPDEST', '/var/apps/mimocode/target')) / 'mimocode.sock'
-    if gateway_socket.exists():
-        gateway_socket.unlink()
+    trim_appdest = os.environ.get('TRIM_APPDEST', '/var/apps/mimocode/target')
+    gateway_socket = Path(trim_appdest) / 'mimocode.sock'
+    log(f'Starting gateway: TRIM_APPDEST={trim_appdest}, socket={gateway_socket}')
     try:
+        if gateway_socket.exists():
+            log(f'Removing existing socket: {gateway_socket}')
+            gateway_socket.unlink()
+        # Ensure parent directory exists
+        gateway_socket.parent.mkdir(parents=True, exist_ok=True)
+        
         import socketserver
         class ThreadingUnixServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
             pass
+        log(f'Binding to Unix socket: {gateway_socket}')
         httpd_unix = ThreadingUnixServer(str(gateway_socket), Handler)
         # Set proper permissions for gateway access
         gateway_socket.chmod(0o666)
         log(f'Gateway socket listening on {gateway_socket} (prefix /app/mimocode)')
         httpd_unix.serve_forever()
     except KeyboardInterrupt:
+        log('KeyboardInterrupt, shutting down gateway')
         if gateway_socket.exists():
             gateway_socket.unlink()
         pass
+    except Exception as e:
+        log(f'Failed to start gateway socket: {e}')
+        import traceback
+        traceback.print_exc(file=sys.stderr)
+        # Keep TCP server running even if gateway fails
+        log('TCP server still running on 0.0.0.0:{LISTEN_PORT}')
+        while True:
+            time.sleep(3600)
 
 
 if __name__ == '__main__':

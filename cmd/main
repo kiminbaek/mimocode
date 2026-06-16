@@ -50,6 +50,8 @@ start)
         sync_appcenter_status "stop"
         exit 1
     fi
+    # Cleanup gateway socket before start
+    rm -f "$TRIM_APPDEST/mimocode.sock" 2>/dev/null || true
     if ! pid_alive "$WRAPPER_PID"; then
         nohup python3 "$WRAPPER_SCRIPT" "$WRAPPER_PORT" >> "$WRAPPER_LOG" 2>&1 &
         echo $! > "$WRAPPER_PID"
