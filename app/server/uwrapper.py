@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 APP_NAME = 'mimocode'
-WRAPPER_VERSION = '0.11.12'
+WRAPPER_VERSION = '0.11.13'
 LISTEN_PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 5670
 MIMO_PORT = int(os.environ.get('MIMO_PORT', '5669'))
 MIMO_BIN = os.environ.get('MIMO_BIN', '/usr/local/bin/mimo')
@@ -1055,7 +1055,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         log('%s %s' % (self.client_address[0], fmt % args))
 
     def translate_path(self, path: str) -> str:
-        # Strip fnOS gateway prefix /app/mimocode
+        # fnOS gateway already stripped /app/mimocode prefix, only strip if it's still present
+        # (some cases can have prefix doubled)
         parsed_path = urllib.parse.urlparse(path).path
         if parsed_path.startswith('/app/mimocode'):
             parsed_path = parsed_path[len('/app/mimocode'):]
@@ -1157,7 +1158,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         start_mimo_web()
         parsed = urllib.parse.urlparse(self.path)
         proxy_path = parsed.path
-        # Strip fnOS gateway prefix /app/mimocode
+        # fnOS gateway already stripped /app/mimocode prefix, only strip if it's still present
         if proxy_path.startswith('/app/mimocode'):
             proxy_path = proxy_path[len('/app/mimocode'):] or '/'
         if proxy_path.startswith('/mimo-web'):
@@ -1244,7 +1245,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     def do_GET(self) -> None:
         path = urllib.parse.urlparse(self.path).path
-        # Strip fnOS gateway prefix /app/mimocode
+        # fnOS gateway already stripped /app/mimocode prefix, only strip if it's still present
         if path.startswith('/app/mimocode'):
             path = path[len('/app/mimocode'):] or '/'
         try:
@@ -1305,7 +1306,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     def do_PUT(self) -> None:
         path = urllib.parse.urlparse(self.path).path
-        # Strip fnOS gateway prefix /app/mimocode
+        # fnOS gateway already stripped /app/mimocode prefix, only strip if it's still present
         if path.startswith('/app/mimocode'):
             path = path[len('/app/mimocode'):] or '/'
         if path.startswith('/mimo-web') or self._should_proxy_mimo_root(path):
@@ -1314,7 +1315,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     def do_PATCH(self) -> None:
         path = urllib.parse.urlparse(self.path).path
-        # Strip fnOS gateway prefix /app/mimocode
+        # fnOS gateway already stripped /app/mimocode prefix, only strip if it's still present
         if path.startswith('/app/mimocode'):
             path = path[len('/app/mimocode'):] or '/'
         if path.startswith('/mimo-web') or self._should_proxy_mimo_root(path):
@@ -1323,7 +1324,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     def do_DELETE(self) -> None:
         path = urllib.parse.urlparse(self.path).path
-        # Strip fnOS gateway prefix /app/mimocode
+        # fnOS gateway already stripped /app/mimocode prefix, only strip if it's still present
         if path.startswith('/app/mimocode'):
             path = path[len('/app/mimocode'):] or '/'
         if path.startswith('/mimo-web') or self._should_proxy_mimo_root(path):
@@ -1332,7 +1333,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urllib.parse.urlparse(self.path).path
-        # Strip fnOS gateway prefix /app/mimocode
+        # fnOS gateway already stripped /app/mimocode prefix, only strip if it's still present
         if path.startswith('/app/mimocode'):
             path = path[len('/app/mimocode'):] or '/'
         try:
