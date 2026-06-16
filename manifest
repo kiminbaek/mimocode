@@ -1,5 +1,5 @@
 appname               = mimocode
-version               = 0.11.20
+version               = 0.11.21
 display_name          = MiMo Code
 desc                  = <h3>小米 AI 编程助手</h3><p>将 MiMo Code 打包为飞牛 fnOS 应用，提供浏览器工作台、Provider 配置、运行日志和诊断能力。<br/>内置官方 MiMo Code 二进制，支持 Web 界面和 SSH 终端命令两种使用方式。</p><p><b>使用方法：</b>在应用中心点击「打开」，首次进入时设置管理密码，然后配置 Provider/API Key 即可使用。<br/>也可 SSH 登录飞牛后运行 <code>mimo</code> 命令使用终端版。</p><p>开源地址：<a href="https://github.com/XiaomiMiMo/MiMo-Code" target="_blank">github.com/XiaomiMiMo/MiMo-Code</a></p>
 source                = thirdparty
