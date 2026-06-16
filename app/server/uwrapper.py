@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""MiMo Code fnOS App Wrapper v0.11.2
+"""MiMo Code fnOS App Wrapper v0.11.3
 
 User-first wrapper around the official `mimo` binary.
 - opens to the main conversation workspace
@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 APP_NAME = 'mimocode'
-WRAPPER_VERSION = '0.11.2'
+WRAPPER_VERSION = '0.11.3'
 LISTEN_PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 5670
 MIMO_PORT = int(os.environ.get('MIMO_PORT', '5669'))
 MIMO_BIN = os.environ.get('MIMO_BIN', '/usr/local/bin/mimo')
@@ -1011,13 +1011,26 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             conn.request(self.command, upstream_path, body=body, headers=headers)
             resp = conn.getresponse()
             data = resp.read()
+            resp_headers = resp.getheaders()
+            content_type = next((v for k, v in resp_headers if k.lower() == 'content-type'), '')
+            if resp.status == 200 and 'text/html' in content_type.lower():
+                text = data.decode('utf-8', 'replace')
+                if '<base ' not in text.lower():
+                    if '<head>' in text:
+                        text = text.replace('<head>', '<head><base href="/mimo-web/">', 1)
+                    elif '<head ' in text.lower():
+                        text = re.sub(r'(<head[^>]*>)', r'\1<base href="/mimo-web/">', text, count=1, flags=re.I)
+                text = re.sub(r'((?:src|href|action)=(["\']))/(?!/|mimo-web/|api/)', r'\1/mimo-web/', text, flags=re.I)
+                text = re.sub(r'url\(/(?!/|mimo-web/)', 'url(/mimo-web/', text, flags=re.I)
+                data = text.encode('utf-8')
             self.send_response(resp.status, resp.reason)
-            skip = {'transfer-encoding', 'connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailers', 'upgrade'}
-            for k, v in resp.getheaders():
+            skip = {'transfer-encoding', 'connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailers', 'upgrade', 'content-length'}
+            for k, v in resp_headers:
                 if k.lower() in skip:
                     continue
                 self.send_header(k, v)
             self.send_header('X-MiMo-Code-Proxy', 'mimo-web')
+            self.send_header('Content-Length', str(len(data)))
             self.end_headers()
             self.wfile.write(data)
         except Exception as e:

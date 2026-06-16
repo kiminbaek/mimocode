@@ -1,4 +1,4 @@
-/* MiMo Code fnOS App v0.11.2 */
+/* MiMo Code fnOS App v0.11.3 */
 const $ = s => document.querySelector(s);
 const $$ = s => Array.from(document.querySelectorAll(s));
 const state = { token: localStorage.getItem('mimocode_token') || '', setup: false, status: null, providers: [], presets: [], config: {}, view: 'workspace', sessions: [] };
@@ -118,10 +118,10 @@ async function saveGuideProvider(){
 function renderWorkspace(){
   const model=state.config.default_model||'mimo/mimo-auto';
   const nativeUrl=`${location.origin}/mimo-web/`;
-  $('#content').innerHTML=`${providerGuide()}<section class="panel hero-panel"><div class="hero-layout"><div><h1>MiMo Code 工作台</h1><p>工作台负责状态、模型、诊断和配置。真正聊天进入独立「官方会话」页面，由官方 mimo web 接管。</p><div class="hero-actions"><button class="btn primary" onclick="navigate('official')">进入官方会话</button><button class="btn ghost" onclick="openNativeWeb()">新窗口打开</button><button class="btn ghost" onclick="copyText('${esc(nativeUrl)}')">复制会话地址</button></div></div><div class="hero-status">${statusCards()}</div></div></section>
+  $('#content').innerHTML=`<section class="panel hero-panel"><div class="hero-layout"><div><h1>MiMo Code 工作台</h1><p>工作台负责状态、模型、诊断和配置。真正聊天进入独立「官方会话」页面，由官方 mimo web 接管。</p><div class="hero-actions"><button class="btn primary" onclick="navigate('official')">进入官方会话</button><button class="btn ghost" onclick="openNativeWeb()">新窗口打开</button><button class="btn ghost" onclick="copyText('${esc(nativeUrl)}')">复制会话地址</button></div></div><div class="hero-status">${statusCards()}</div></div></section>
   <div class="dashboard-grid">
     <section class="panel"><h3>项目概览</h3><p class="hint">查看当前项目目录、文件类型和识别标记。</p><button class="btn ghost" onclick="navigate('overview')">打开项目概览</button></section>
-    <section class="panel"><h3>模型分组 / 免费标签</h3><p><code>${esc(model)}</code></p><p class="hint">官方模型已按分组展示，限时免费模型带标签。</p><button class="btn ghost" onclick="navigate('providers')">模型与服务商</button></section>
+    <section class="panel"><h3>当前模型</h3><p><code>${esc(model)}</code></p><p class="hint">需要切换模型或填写 Key 时进入模型与服务商。</p><button class="btn ghost" onclick="navigate('providers')">配置模型</button></section>
     <section class="panel"><h3>免费模型库</h3><p class="hint">内置常见免费/限免/试用模型入口，可一键填入 Provider 表单。</p><button class="btn ghost" onclick="navigate('freeModels')">打开免费模型库</button></section>
     <section class="panel"><h3>健康检查</h3><p class="hint">一眼检查 Web、CLI、Provider、项目目录和日志。</p><button class="btn ghost" onclick="navigate('health')">立即检查</button></section>
     <section class="panel"><h3>安全边界说明</h3><p class="hint">说明二进制、凭据、命令、文件访问边界。</p><button class="btn ghost" onclick="navigate('security')">查看说明</button></section>
@@ -164,7 +164,7 @@ async function renderFreeModels(){
     const r=await api('free-models');
     $('#freeModelNotice').textContent=r.notice||'';
     const groups=r.groups||{};
-    $('#freeModelBox').innerHTML=Object.keys(groups).map(g=>`<div class="model-group"><h3>${esc(g)}</h3><div class="provider-list">${groups[g].map(m=>`<div class="provider-card"><h3>${esc(m.display_name||m.model)} <span class="pill free">${esc(m.free_type)}</span></h3><p>${esc(m.note)}</p><p class="hint">模型 ID：${esc(m.model||'动态发现')} · Base URL：${esc(m.base_url||'官方内置')} · ${m.requires_key?'需要 API Key':'无需 API Key'} · ${esc(m.region||'')}</p><div class="actions"><button class="btn compact primary" onclick='useFreeModel(${JSON.stringify(JSON.stringify(m))})'>填入配置</button><button class="btn compact ghost" onclick="copyText('${esc(m.model)}')">复制模型名</button></div></div>`).join('')}</div></div>`).join('');
+    $('#freeModelBox').innerHTML=Object.keys(groups).map(g=>`<div class="model-group"><h3>${esc(g)}</h3><div class="provider-list compact-cards">${groups[g].map(m=>`<div class="provider-card free-card"><div class="card-title"><h3>${esc(m.display_name||m.model)}</h3><span class="pill free">${esc(m.free_type)}</span></div><p>${esc(m.note)}</p><p class="hint"><b>模型</b>：${esc(m.model||'动态发现')}<br><b>接口</b>：${esc(m.base_url||'官方内置')}<br><b>Key</b>：${m.requires_key?'需要 API Key':'无需 API Key'} · ${esc(m.region||'')}</p><div class="actions"><button class="btn compact primary" onclick='useFreeModel(${JSON.stringify(JSON.stringify(m))})'>填入配置</button><button class="btn compact ghost" onclick="copyText('${esc(m.model)}')">复制模型名</button></div></div>`).join('')}</div></div>`).join('');
   }catch(e){ $('#freeModelBox').textContent=e.message; }
 }
 function useFreeModel(raw){
@@ -218,7 +218,7 @@ async function exportConfig(include_keys){ const r=await api('config/export?incl
 async function checkUpdate(){ const r=await api('update/check'); $('#advancedOut').textContent=JSON.stringify(r,null,2); }
 async function loadMcp(){ const r=await api('mcp'); $('#advancedOut').textContent=r.raw||JSON.stringify(r,null,2); }
 async function renderToolbox(){ $('#content').innerHTML=`<section class="panel"><div class="panel-head"><div><h2>开发者工具箱</h2><p>默认隐藏；只提供项目内文件预览、轻量状态、ACP/Agent 只读和 MiMo 命令白名单。</p></div><button class="btn ghost" onclick="navigate('advanced')">返回高级设置</button></div><div class="tool-grid"><button class="btn primary" onclick="toolFiles()">项目文件</button><button class="btn" onclick="toolPerf()">运行状态</button><button class="btn" onclick="toolAcp()">ACP 服务</button><button class="btn" onclick="toolAgents()">Agent 配置</button><button class="btn" onclick="toolCommand()">MiMo 命令助手</button></div><div id="toolBox" class="output small">请选择一个工具。所有高风险能力均受限。</div></section>`; }
-async function toolFiles(path=''){ const r=await api('toolbox/files?path='+encodeURIComponent(path)); if(r.type==='dir') $('#toolBox').innerHTML=`<b>根目录：</b>${esc(r.root)}<br><b>当前：</b>${esc(r.path)}<div class="file-list">${r.entries.map(e=>`<button class="file-row" onclick="toolFiles('${esc(e.path)}')">${e.type==='dir'?'📁':'📄'} ${esc(e.name)} <span>${e.type} · ${e.size}</span></button>`).join('')}</div>`; else $('#toolBox').textContent=r.text||r.error; }
+async function toolFiles(path=''){ const r=await api('toolbox/files?path='+encodeURIComponent(path)); if(r.type==='dir') $('#toolBox').innerHTML=`<b>根目录：</b>${esc(r.root)}<br><b>当前：</b>${esc(r.path)}<div class="file-list">${r.entries.map(e=>`<button class="file-row" onclick="toolFiles('${esc(e.path)}')">${e.type==='dir'?'[目录]':'[文件]'} ${esc(e.name)} <span>${e.type} · ${e.size}</span></button>`).join('')}</div>`; else $('#toolBox').textContent=r.text||r.error; }
 async function toolPerf(){ const r=await api('toolbox/perf'); $('#toolBox').textContent=JSON.stringify(r,null,2); }
 async function toolAcp(){ const r=await api('toolbox/acp'); $('#toolBox').textContent=r.help||JSON.stringify(r,null,2); }
 async function toolAgents(){ const r=await api('toolbox/agents'); $('#toolBox').textContent=r.raw||JSON.stringify(r,null,2); }
