@@ -69,11 +69,12 @@ function officialDirectUrl(){
   // 1. If accessed via HTTPS → use /mimo-web proxy (already HTTPS through gateway)
   // 2. If accessed via HTTP but path starts with /app/mimocode → still use /mimo-web proxy
   // 3. Only direct HTTP (LAN) → direct connect http://host:5669
+  // 4. Official MiMo shows project list/create on /projects, so we open /mimo-web/projects
   const isHttps = location.protocol === 'https:';
   const isGatewayPath = location.pathname.startsWith('/app/mimocode');
   console.log(`[officialDirectUrl] protocol=${location.protocol} path=${location.path} isHttps=${isHttps} isGatewayPath=${isGatewayPath}`);
   if(isHttps || isGatewayPath) {
-    return '/mimo-web/';
+    return '/mimo-web/projects';
   }
   const rawHost=location.hostname || (location.host||'').split(':')[0];
   const host=(rawHost.includes(':') && !rawHost.startsWith('[')) ? '['+rawHost+']' : rawHost;
