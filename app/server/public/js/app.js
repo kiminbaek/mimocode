@@ -64,10 +64,15 @@ async function refreshAll(){
   const toolTab=document.querySelector('[data-view="toolbox"]'); if(toolTab) toolTab.classList.toggle('hidden', !state.config.toolbox_enabled);
 }
 function officialDirectUrl(){
+  // If wrapper is accessed via HTTPS (fnOS official domain), we can't load HTTP iframe.
+  // In that case, use wrapper proxy /mimo-web/ which is also via gateway, so HTTPS works automatically.
+  // If wrapper is HTTP, direct connection works fine.
+  if(location.protocol === 'https:') {
+    return '/mimo-web/';
+  }
   const rawHost=location.hostname || (location.host||'').split(':')[0];
   const host=(rawHost.includes(':') && !rawHost.startsWith('[')) ? '['+rawHost+']' : rawHost;
-  const protocol = location.protocol === 'https:' ? 'https:' : 'http:';
-  return protocol + '//' + host + ':5669/';
+  return 'http://' + host + ':5669/';
 }
 function rememberOfficialFrameUrl(){ /* 直连官方页面跨端口不同源，不能可靠读取 iframe 内部路由；保持 no-op，避免缓存错误路径。 */ }
 function navigate(view){
