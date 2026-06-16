@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""MiMo Code fnOS App Wrapper v0.11.7
+"""MiMo Code fnOS App Wrapper v0.11.8
 
 User-first wrapper around the official `mimo` binary.
 - opens to the main conversation workspace
@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 APP_NAME = 'mimocode'
-WRAPPER_VERSION = '0.11.7'
+WRAPPER_VERSION = '0.11.8'
 LISTEN_PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 5670
 MIMO_PORT = int(os.environ.get('MIMO_PORT', '5669'))
 MIMO_BIN = os.environ.get('MIMO_BIN', '/usr/local/bin/mimo')
@@ -55,7 +55,7 @@ BACKUP_DIR = VAR_DIR / 'config_backups'
 MIMO_WEB_ROOT_PROXY_PREFIXES = (
     '/provider', '/project', '/path', '/agent', '/config', '/session',
     '/command', '/question', '/permission', '/vcs', '/mcp', '/global',
-    '/assets',
+    '/assets', '/file',
 )
 
 SAFE_TEXT_LIMIT = 160 * 1024
@@ -1099,15 +1099,29 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def _proxy_auth_ok(self) -> bool:
         return validate_token(self._token()) or validate_token(self._cookie_token())
 
+    def _is_local_public_path(self, path: str) -> bool:
+        local = (PUBLIC_DIR / path.lstrip('/')).resolve()
+        try:
+            local.relative_to(PUBLIC_DIR.resolve())
+        except ValueError:
+            return False
+        return local.exists()
+
+    def _looks_like_mimo_spa_route(self, path: str) -> bool:
+        # Official MiMo SPA routes can look like /<base64-project-dir>/session/<session_id>.
+        # Example: /L3Jvb3QvaW50ZWw/session/ses_xxx where L3J... decodes to /root/intel.
+        if path in {'/', '/index.html'} or path.startswith(('/api/', '/css/', '/js/')):
+            return False
+        if self._is_local_public_path(path):
+            return False
+        return bool(re.match(r'^/[A-Za-z0-9_-]{8,}(?:/|$)', path))
+
     def _should_proxy_mimo_root(self, path: str) -> bool:
         if path.startswith('/assets/'):
-            local = (PUBLIC_DIR / path.lstrip('/')).resolve()
-            try:
-                local.relative_to(PUBLIC_DIR.resolve())
-            except ValueError:
-                return True
-            return not local.exists()
-        return any(path == p or path.startswith(p + '/') for p in MIMO_WEB_ROOT_PROXY_PREFIXES)
+            return not self._is_local_public_path(path)
+        if any(path == p or path.startswith(p + '/') for p in MIMO_WEB_ROOT_PROXY_PREFIXES):
+            return True
+        return self._looks_like_mimo_spa_route(path)
 
     def _send_json_with_token_cookie(self, data: Any, token: str, status: int = 200) -> None:
         body = json.dumps(data, ensure_ascii=False).encode('utf-8')

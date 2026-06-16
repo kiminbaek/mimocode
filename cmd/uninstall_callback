@@ -1,5 +1,5 @@
 #!/bin/bash
-# MiMo Code uninstall callback v0.11.7
+# MiMo Code uninstall callback v0.11.8
 
 LOG_FILE="${TRIM_PKGVAR}/uninstall.log"
 mkdir -p "${TRIM_PKGVAR}" 2>/dev/null || true
