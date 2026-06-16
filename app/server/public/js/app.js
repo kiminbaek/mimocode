@@ -230,11 +230,9 @@ async function renderSecurity(){
 <div class="panel">
   <div class="panel-head"><h3>安全信息</h3></div>
   <p>wrapper 不会存储你的 API Key 明文，加密保存在配置文件中。</p>
-  <p>官方 MiMo 会将你的项目和对话存储在 `~/.config/mimocode` 目录下，请妥善保管。</p>
+  <p>官方 MiMo 会将你的项目和对话存储在 ~/.config/mimocode 目录下，请妥善保管。</p>
 </div>
 `;
-  $('#content').innerHTML=html;
-}
   $('#content').innerHTML=html;
 }
 function renderBackup(){
