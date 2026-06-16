@@ -66,7 +66,8 @@ async function refreshAll(){
 function officialDirectUrl(){
   const rawHost=location.hostname || (location.host||'').split(':')[0];
   const host=(rawHost.includes(':') && !rawHost.startsWith('[')) ? '['+rawHost+']' : rawHost;
-  return 'http://' + host + ':5669/';
+  const protocol = location.protocol === 'https:' ? 'https:' : 'http:';
+  return protocol + '//' + host + ':5669/';
 }
 function rememberOfficialFrameUrl(){ /* 直连官方页面跨端口不同源，不能可靠读取 iframe 内部路由；保持 no-op，避免缓存错误路径。 */ }
 function navigate(view){
