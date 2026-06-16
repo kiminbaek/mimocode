@@ -64,8 +64,16 @@ async function refreshAll(){
   const toolTab=document.querySelector('[data-view="toolbox"]'); if(toolTab) toolTab.classList.toggle('hidden', !state.config.toolbox_enabled);
 }
 function officialDirectUrl(){
-  // v0.5.0 approach: always direct connect to host:5669 with same protocol
-  // Official MiMo handles routing, project creation, everything
+  // If accessed via fnOS gateway (path starts with /app/mimocode):
+  // - Cannot directly connect :5669 because firewall doesn't expose it
+  // - Use wrapper proxy /mimo-web/ to keep full https through gateway
+  // Only direct connect when it's LAN direct HTTP access (ip:port)
+  const isGatewayPath = location.pathname.startsWith('/app/mimocode');
+  if(isGatewayPath) {
+    // accessed via fnOS gateway: use proxy
+    return '/mimo-web/';
+  }
+  // LAN direct access: direct connect same protocol
   const rawHost=location.hostname || (location.host||'').split(':')[0];
   const host=(rawHost.includes(':') && !rawHost.startsWith('[')) ? '['+rawHost+']' : rawHost;
   return location.protocol + '//' + host + ':5669/';
