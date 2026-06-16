@@ -64,10 +64,15 @@ async function refreshAll(){
   const toolTab=document.querySelector('[data-view="toolbox"]'); if(toolTab) toolTab.classList.toggle('hidden', !state.config.toolbox_enabled);
 }
 function officialDirectUrl(){
-  // If wrapper is accessed via HTTPS (fnOS official domain), we can't load HTTP iframe.
-  // In that case, use wrapper proxy /mimo-web/ which is also via gateway, so HTTPS works automatically.
-  // If wrapper is HTTP, direct connection works fine.
-  if(location.protocol === 'https:') {
+  // If wrapper is accessed via gateway (fnOS official domain), we can't guarantee port 5669 HTTPS.
+  // So:
+  // 1. If accessed via HTTPS → use /mimo-web proxy (already HTTPS through gateway)
+  // 2. If accessed via HTTP but path starts with /app/mimocode → still use /mimo-web proxy
+  // 3. Only direct HTTP (LAN) → direct connect http://host:5669
+  const isHttps = location.protocol === 'https:';
+  const isGatewayPath = location.pathname.startsWith('/app/mimocode');
+  console.log(`[officialDirectUrl] protocol=${location.protocol} path=${location.path} isHttps=${isHttps} isGatewayPath=${isGatewayPath}`);
+  if(isHttps || isGatewayPath) {
     return '/mimo-web/';
   }
   const rawHost=location.hostname || (location.host||'').split(':')[0];
