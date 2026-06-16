@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 APP_NAME = 'mimocode'
-WRAPPER_VERSION = '0.11.13'
+WRAPPER_VERSION = '0.11.14'
 LISTEN_PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 5670
 MIMO_PORT = int(os.environ.get('MIMO_PORT', '5669'))
 MIMO_BIN = os.environ.get('MIMO_BIN', '/usr/local/bin/mimo')
@@ -1055,12 +1055,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         log('%s %s' % (self.client_address[0], fmt % args))
 
     def translate_path(self, path: str) -> str:
-        # fnOS gateway already stripped /app/mimocode prefix, only strip if it's still present
-        # (some cases can have prefix doubled)
-        parsed_path = urllib.parse.urlparse(path).path
-        if parsed_path.startswith('/app/mimocode'):
-            parsed_path = parsed_path[len('/app/mimocode'):]
-        rel = parsed_path.lstrip('/') or 'index.html'
+        rel = urllib.parse.urlparse(path).path.lstrip('/') or 'index.html'
         return str((PUBLIC_DIR / rel).resolve())
 
     def _send_json(self, data: Any, status: int = 200) -> None:
@@ -1158,13 +1153,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         start_mimo_web()
         parsed = urllib.parse.urlparse(self.path)
         proxy_path = parsed.path
-        # fnOS gateway already stripped /app/mimocode prefix, only strip if it's still present
-        if proxy_path.startswith('/app/mimocode'):
-            proxy_path = proxy_path[len('/app/mimocode'):] or '/'
-        if proxy_path.startswith('/mimo-web'):
-            upstream_path = proxy_path[len('/mimo-web'):] or '/'
+        if parsed.path.startswith('/mimo-web'):
+            upstream_path = parsed.path[len('/mimo-web'):] or '/'
         else:
-            upstream_path = proxy_path or '/'
+            upstream_path = parsed.path or '/'
         if parsed.query:
             upstream_path += '?' + parsed.query
         headers = {k: v for k, v in self.headers.items() if k.lower() not in {'host', 'connection', 'content-length', 'accept-encoding'}}
@@ -1245,9 +1237,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     def do_GET(self) -> None:
         path = urllib.parse.urlparse(self.path).path
-        # fnOS gateway already stripped /app/mimocode prefix, only strip if it's still present
-        if path.startswith('/app/mimocode'):
-            path = path[len('/app/mimocode'):] or '/'
         try:
             if path.startswith('/mimo-web') or self._should_proxy_mimo_root(path):
                 return self._proxy_mimo_web()
@@ -1306,36 +1295,24 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     def do_PUT(self) -> None:
         path = urllib.parse.urlparse(self.path).path
-        # fnOS gateway already stripped /app/mimocode prefix, only strip if it's still present
-        if path.startswith('/app/mimocode'):
-            path = path[len('/app/mimocode'):] or '/'
         if path.startswith('/mimo-web') or self._should_proxy_mimo_root(path):
             return self._proxy_mimo_web()
         return self._send_json({'error': '接口不存在'}, 404)
 
     def do_PATCH(self) -> None:
         path = urllib.parse.urlparse(self.path).path
-        # fnOS gateway already stripped /app/mimocode prefix, only strip if it's still present
-        if path.startswith('/app/mimocode'):
-            path = path[len('/app/mimocode'):] or '/'
         if path.startswith('/mimo-web') or self._should_proxy_mimo_root(path):
             return self._proxy_mimo_web()
         return self._send_json({'error': '接口不存在'}, 404)
 
     def do_DELETE(self) -> None:
         path = urllib.parse.urlparse(self.path).path
-        # fnOS gateway already stripped /app/mimocode prefix, only strip if it's still present
-        if path.startswith('/app/mimocode'):
-            path = path[len('/app/mimocode'):] or '/'
         if path.startswith('/mimo-web') or self._should_proxy_mimo_root(path):
             return self._proxy_mimo_web()
         return self._send_json({'error': '接口不存在'}, 404)
 
     def do_POST(self) -> None:
         path = urllib.parse.urlparse(self.path).path
-        # fnOS gateway already stripped /app/mimocode prefix, only strip if it's still present
-        if path.startswith('/app/mimocode'):
-            path = path[len('/app/mimocode'):] or '/'
         try:
             if path.startswith('/mimo-web') or self._should_proxy_mimo_root(path):
                 return self._proxy_mimo_web()
@@ -1431,54 +1408,15 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return self._send_json({'error': str(e), **user_error(str(e), 1)}, 500)
 
 
-def serve_httpd(httpd: http.server.ThreadingHTTPServer) -> None:
-    try:
-        httpd.serve_forever()
-    except KeyboardInterrupt:
-        pass
-
 def main() -> None:
     log(f'Wrapper v{WRAPPER_VERSION} starting on 0.0.0.0:{LISTEN_PORT}')
     start_mimo_web()
     threading.Thread(target=heartbeat, daemon=True).start()
-    
-    # Start TCP server for direct LAN access
-    httpd_tcp = http.server.ThreadingHTTPServer(('0.0.0.0', LISTEN_PORT), Handler)
-    threading.Thread(target=serve_httpd, args=(httpd_tcp,), daemon=True).start()
-    
-    # Start Unix socket server for fnOS unified gateway (non-LAN access via official domain)
-    trim_appdest = os.environ.get('TRIM_APPDEST', '/var/apps/mimocode/target')
-    gateway_socket = Path(trim_appdest) / 'mimocode.sock'
-    log(f'Starting gateway: TRIM_APPDEST={trim_appdest}, socket={gateway_socket}')
+    httpd = http.server.ThreadingHTTPServer(('0.0.0.0', LISTEN_PORT), Handler)
     try:
-        if gateway_socket.exists():
-            log(f'Removing existing socket: {gateway_socket}')
-            gateway_socket.unlink()
-        # Ensure parent directory exists
-        gateway_socket.parent.mkdir(parents=True, exist_ok=True)
-        
-        import socketserver
-        class ThreadingUnixServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
-            pass
-        log(f'Binding to Unix socket: {gateway_socket}')
-        httpd_unix = ThreadingUnixServer(str(gateway_socket), Handler)
-        # Set proper permissions for gateway access
-        gateway_socket.chmod(0o666)
-        log(f'Gateway socket listening on {gateway_socket} (prefix /app/mimocode)')
-        httpd_unix.serve_forever()
+        httpd.serve_forever()
     except KeyboardInterrupt:
-        log('KeyboardInterrupt, shutting down gateway')
-        if gateway_socket.exists():
-            gateway_socket.unlink()
         pass
-    except Exception as e:
-        log(f'Failed to start gateway socket: {e}')
-        import traceback
-        traceback.print_exc(file=sys.stderr)
-        # Keep TCP server running even if gateway fails
-        log('TCP server still running on 0.0.0.0:{LISTEN_PORT}')
-        while True:
-            time.sleep(3600)
 
 
 if __name__ == '__main__':
