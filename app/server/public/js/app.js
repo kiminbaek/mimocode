@@ -1,7 +1,7 @@
-/* MiMo Code fnOS App v0.11.6 */
+/* MiMo Code fnOS App v0.11.7 */
 const $ = s => document.querySelector(s);
 const $$ = s => Array.from(document.querySelectorAll(s));
-const state = { token: localStorage.getItem('mimocode_token') || '', setup: false, status: null, providers: [], presets: [], config: {}, view: 'workspace', sessions: [] };
+const state = { token: localStorage.getItem('mimocode_token') || '', setup: false, status: null, providers: [], presets: [], config: {}, view: 'workspace', sessions: [], officialFrameReady: false };
 const OFFICIAL_MODELS = ['mimo/mimo-auto','xiaomi/mimo-v2-flash','xiaomi/mimo-v2-omni','xiaomi/mimo-v2-pro','xiaomi/mimo-v2.5','xiaomi/mimo-v2.5-pro','xiaomi/mimo-v2.5-pro-ultraspeed'];
 
 function esc(s){ return String(s ?? '').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
@@ -63,8 +63,17 @@ async function refreshAll(){
   $('#statusLine').innerHTML=`${state.status.mimo_open?'<span class="dot ok"></span>':'<span class="dot bad"></span>'} 服务${esc(state.status.friendly.service)} · Provider ${esc(state.status.friendly.provider)} · Wrapper v${esc(state.status.wrapper_version)}`;
   const toolTab=document.querySelector('[data-view="toolbox"]'); if(toolTab) toolTab.classList.toggle('hidden', !state.config.toolbox_enabled);
 }
+function rememberOfficialFrameUrl(){
+  const f=$('#nativeFrame');
+  if(!f) return;
+  try{
+    const loc=f.contentWindow.location;
+    if(loc && loc.pathname) sessionStorage.setItem('mimocode_official_last_url', loc.pathname + loc.search + loc.hash);
+  }catch(e){}
+}
 function navigate(view){
   if(view==='toolbox' && !state.config.toolbox_enabled) view='advanced';
+  if(state.view==='official' && view!=='official') rememberOfficialFrameUrl();
   state.view=view; const content=$('#content');
   if(content) content.classList.toggle('official-content', view==='official');
   $$('.tab').forEach(t=>t.classList.toggle('active',t.dataset.view===view));
@@ -141,17 +150,23 @@ async function renderOverview(){
   try{ const r=await api('overview'); $('#overviewBox').innerHTML=`<div class="status-grid">${card('目录',r.project_dir,r.ok?'ok':'warn')}${card('文件扫描',String(r.files_scanned||0),r.ok?'ok':'warn')}${card('目录扫描',String(r.dirs_scanned||0),r.ok?'ok':'warn')}${card('扫描截断',r.truncated?'是':'否',r.truncated?'warn':'ok')}</div><h3>项目标记</h3><p>${(r.markers||[]).map(x=>`<span class="pill">${esc(x)}</span>`).join('')||'未识别到常见项目标记'}</p><h3>文件类型 Top 10</h3><div class="provider-list">${(r.top_extensions||[]).map(x=>`<div class="provider-card"><b>${esc(x[0])}</b><p>${esc(x[1])} 个文件</p></div>`).join('')||'<div class="empty">暂无数据</div>'}</div>`; }catch(e){ $('#overviewBox').textContent=e.message; }
 }
 async function renderOfficialChat(){
-  const embedUrl='/mimo-web/';
+  const embedUrl=sessionStorage.getItem('mimocode_official_last_url') || '/mimo-web/';
   const content=$('#content');
+  const existing=$('#nativeFrame');
+  if(existing){
+    content.classList.add('official-content');
+    return;
+  }
   content.innerHTML='<section class="panel"><h2>官方会话</h2><p class="hint">正在准备官方会话登录态...</p></section>';
   await ensureSessionCookie();
   content.innerHTML='';
   content.classList.add('official-content');
   const iframe=document.createElement('iframe');
   iframe.id='nativeFrame'; iframe.className='official-native-frame'; iframe.src=embedUrl; iframe.title='MiMo 官方会话';
+  iframe.addEventListener('load',rememberOfficialFrameUrl);
   content.appendChild(iframe);
 }
-async function openNativeWeb(){ await ensureSessionCookie(); window.open('/mimo-web/','_blank'); }
+async function openNativeWeb(){ await ensureSessionCookie(); window.open(sessionStorage.getItem('mimocode_official_last_url') || '/mimo-web/','_blank'); }
 function reloadNativeFrame(){ const f=$('#nativeFrame'); if(f) f.src=f.src; }
 
 async function enableToolboxAndOpenCli(){ if(!state.config.toolbox_enabled){ await api('config',{method:'POST',body:JSON.stringify({toolbox_enabled:true})}); await refreshAll(); } navigate('toolbox'); setTimeout(toolCommand,80); }

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""MiMo Code fnOS App Wrapper v0.11.6
+"""MiMo Code fnOS App Wrapper v0.11.7
 
 User-first wrapper around the official `mimo` binary.
 - opens to the main conversation workspace
@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 APP_NAME = 'mimocode'
-WRAPPER_VERSION = '0.11.6'
+WRAPPER_VERSION = '0.11.7'
 LISTEN_PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 5670
 MIMO_PORT = int(os.environ.get('MIMO_PORT', '5669'))
 MIMO_BIN = os.environ.get('MIMO_BIN', '/usr/local/bin/mimo')
@@ -55,6 +55,7 @@ BACKUP_DIR = VAR_DIR / 'config_backups'
 MIMO_WEB_ROOT_PROXY_PREFIXES = (
     '/provider', '/project', '/path', '/agent', '/config', '/session',
     '/command', '/question', '/permission', '/vcs', '/mcp', '/global',
+    '/assets',
 )
 
 SAFE_TEXT_LIMIT = 160 * 1024
@@ -1099,6 +1100,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         return validate_token(self._token()) or validate_token(self._cookie_token())
 
     def _should_proxy_mimo_root(self, path: str) -> bool:
+        if path.startswith('/assets/'):
+            local = (PUBLIC_DIR / path.lstrip('/')).resolve()
+            try:
+                local.relative_to(PUBLIC_DIR.resolve())
+            except ValueError:
+                return True
+            return not local.exists()
         return any(path == p or path.startswith(p + '/') for p in MIMO_WEB_ROOT_PROXY_PREFIXES)
 
     def _send_json_with_token_cookie(self, data: Any, token: str, status: int = 200) -> None:
@@ -1130,6 +1138,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return
         start_mimo_web()
         parsed = urllib.parse.urlparse(self.path)
+        proxy_path = parsed.path
         if parsed.path.startswith('/mimo-web'):
             upstream_path = parsed.path[len('/mimo-web'):] or '/'
         else:
@@ -1147,9 +1156,43 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             conn = http.client.HTTPConnection('127.0.0.1', MIMO_PORT, timeout=30)
             conn.request(self.command, upstream_path, body=body, headers=headers)
             resp = conn.getresponse()
-            data = resp.read()
             resp_headers = resp.getheaders()
             content_type = next((v for k, v in resp_headers if k.lower() == 'content-type'), '')
+            is_event_stream = 'text/event-stream' in content_type.lower() or upstream_path.startswith('/global/event')
+
+            self.send_response(resp.status, resp.reason)
+            skip = {'transfer-encoding', 'connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailers', 'upgrade', 'content-length'}
+            has_cache_control = False
+            for k, v in resp_headers:
+                kl = k.lower()
+                if kl in skip:
+                    continue
+                if kl == 'cache-control':
+                    has_cache_control = True
+                    if parsed.path.startswith('/mimo-web/assets/') or proxy_path.startswith('/assets/'):
+                        continue
+                self.send_header(k, v)
+            if is_event_stream:
+                try:
+                    if conn.sock:
+                        conn.sock.settimeout(None)
+                except Exception:
+                    pass
+                if not has_cache_control:
+                    self.send_header('Cache-Control', 'no-cache')
+                self.send_header('X-Accel-Buffering', 'no')
+                self.send_header('Connection', 'keep-alive')
+                self.send_header('X-MiMo-Code-Proxy', 'mimo-web-stream')
+                self.end_headers()
+                while True:
+                    chunk = resp.read(8192)
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    self.wfile.flush()
+                return
+
+            data = resp.read()
             if resp.status == 200 and 'text/html' in content_type.lower():
                 text = data.decode('utf-8', 'replace')
                 if '<base ' not in text.lower():
@@ -1160,19 +1203,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 text = re.sub(r'((?:src|href|action)=(["\']))/(?!/|mimo-web/|api/)', r'\1/mimo-web/', text, flags=re.I)
                 text = re.sub(r'url\(/(?!/|mimo-web/)', 'url(/mimo-web/', text, flags=re.I)
                 data = text.encode('utf-8')
-            self.send_response(resp.status, resp.reason)
-            skip = {'transfer-encoding', 'connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailers', 'upgrade', 'content-length'}
-            has_cache_control = False
-            for k, v in resp_headers:
-                kl = k.lower()
-                if kl in skip:
-                    continue
-                if kl == 'cache-control':
-                    has_cache_control = True
-                    if parsed.path.startswith('/mimo-web/assets/'):
-                        continue
-                self.send_header(k, v)
-            if parsed.path.startswith('/mimo-web/assets/'):
+            if parsed.path.startswith('/mimo-web/assets/') or proxy_path.startswith('/assets/'):
                 self.send_header('Cache-Control', 'public, max-age=86400')
             elif not has_cache_control:
                 self.send_header('Cache-Control', 'no-store')
