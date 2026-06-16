@@ -84,6 +84,8 @@ stop)
     rm -f "$MIMO_PID"
     pkill -f "uwrapper.py $WRAPPER_PORT" 2>/dev/null || true
     pkill -f "mimo web.*--port $MIMO_PORT" 2>/dev/null || true
+    # Cleanup gateway unix socket
+    rm -f "$TRIM_APPDEST/mimocode.sock" 2>/dev/null || true
     sync_appcenter_status "stop"
     exit 0
     ;;

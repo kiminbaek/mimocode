@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 APP_NAME = 'mimocode'
-WRAPPER_VERSION = '0.11.9'
+WRAPPER_VERSION = '0.11.10'
 LISTEN_PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 5670
 MIMO_PORT = int(os.environ.get('MIMO_PORT', '5669'))
 MIMO_BIN = os.environ.get('MIMO_BIN', '/usr/local/bin/mimo')
@@ -1408,14 +1408,37 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return self._send_json({'error': str(e), **user_error(str(e), 1)}, 500)
 
 
+def serve_httpd(httpd: http.server.ThreadingHTTPServer) -> None:
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        pass
+
 def main() -> None:
     log(f'Wrapper v{WRAPPER_VERSION} starting on 0.0.0.0:{LISTEN_PORT}')
     start_mimo_web()
     threading.Thread(target=heartbeat, daemon=True).start()
-    httpd = http.server.ThreadingHTTPServer(('0.0.0.0', LISTEN_PORT), Handler)
+    
+    # Start TCP server for direct LAN access
+    httpd_tcp = http.server.ThreadingHTTPServer(('0.0.0.0', LISTEN_PORT), Handler)
+    threading.Thread(target=serve_httpd, args=(httpd_tcp,), daemon=True).start()
+    
+    # Start Unix socket server for fnOS unified gateway (non-LAN access via official domain)
+    gateway_socket = Path(os.environ.get('TRIM_APPDEST', '/var/apps/mimocode/target')) / 'mimocode.sock'
+    if gateway_socket.exists():
+        gateway_socket.unlink()
     try:
-        httpd.serve_forever()
+        import socketserver
+        class ThreadingUnixServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
+            pass
+        httpd_unix = ThreadingUnixServer(str(gateway_socket), Handler)
+        # Set proper permissions for gateway access
+        gateway_socket.chmod(0o666)
+        log(f'Gateway socket listening on {gateway_socket} (prefix /app/mimocode)')
+        httpd_unix.serve_forever()
     except KeyboardInterrupt:
+        if gateway_socket.exists():
+            gateway_socket.unlink()
         pass
 
 
