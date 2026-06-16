@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""MiMo Code fnOS App Wrapper v0.11.0
+"""MiMo Code fnOS App Wrapper v0.11.1
 
 User-first wrapper around the official `mimo` binary.
 - opens to the main conversation workspace
@@ -33,7 +33,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 APP_NAME = 'mimocode'
-WRAPPER_VERSION = '0.11.0'
+WRAPPER_VERSION = '0.11.1'
 LISTEN_PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 5670
 MIMO_PORT = int(os.environ.get('MIMO_PORT', '5669'))
 MIMO_BIN = os.environ.get('MIMO_BIN', '/usr/local/bin/mimo')
@@ -97,15 +97,34 @@ def grouped_models(models: List[str]) -> Dict[str, List[Dict[str, Any]]]:
     return groups
 
 FREE_MODEL_LIBRARY: List[Dict[str, Any]] = [
-    {'provider': 'MiMo 官方', 'provider_id': 'mimo_official', 'base_url': '', 'model': 'mimo/mimo-auto', 'free_type': '官方默认 / 限时免费', 'requires_key': False, 'region': 'CN', 'note': '官方默认模型，推荐首次使用；免费状态以 MiMo 官方账号权益为准。'},
-    {'provider': 'MiMo 官方', 'provider_id': 'mimo_official', 'base_url': '', 'model': 'xiaomi/mimo-v2-flash', 'free_type': '限时免费', 'requires_key': False, 'region': 'CN', 'note': '轻量快速，适合日常代码问答；额度以官方为准。'},
-    {'provider': 'OpenRouter', 'provider_id': 'openrouter', 'base_url': 'https://openrouter.ai/api/v1', 'model': 'google/gemini-2.0-flash-exp:free', 'free_type': '免费路由 / 需 Key', 'requires_key': True, 'region': 'Global', 'note': 'OpenRouter 免费模型经常变化，模型名以 OpenRouter 页面为准。'},
-    {'provider': 'OpenRouter', 'provider_id': 'openrouter', 'base_url': 'https://openrouter.ai/api/v1', 'model': 'meta-llama/llama-3.1-8b-instruct:free', 'free_type': '免费路由 / 需 Key', 'requires_key': True, 'region': 'Global', 'note': '适合轻量代码解释；如模型下线请在 OpenRouter 搜索 :free 模型替换。'},
-    {'provider': '硅基流动 SiliconFlow', 'provider_id': 'siliconflow', 'base_url': 'https://api.siliconflow.cn/v1', 'model': 'Qwen/Qwen2.5-7B-Instruct', 'free_type': '免费/赠送额度', 'requires_key': True, 'region': 'CN', 'note': '硅基流动常有免费模型或新用户额度，实际可用以控制台为准。'},
-    {'provider': '硅基流动 SiliconFlow', 'provider_id': 'siliconflow', 'base_url': 'https://api.siliconflow.cn/v1', 'model': 'THUDM/glm-4-9b-chat', 'free_type': '免费/赠送额度', 'requires_key': True, 'region': 'CN', 'note': '常见国产开源小模型入口，适合低成本测试。'},
-    {'provider': 'ModelScope 魔搭', 'provider_id': 'modelscope', 'base_url': 'https://api-inference.modelscope.cn/v1', 'model': 'Qwen/Qwen2.5-Coder-7B-Instruct', 'free_type': '免费/试用额度', 'requires_key': True, 'region': 'CN', 'note': '适合代码任务；模型和额度以 ModelScope 控制台为准。'},
-    {'provider': '智谱 GLM', 'provider_id': 'zhipu', 'base_url': 'https://open.bigmodel.cn/api/paas/v4', 'model': 'glm-4-flash', 'free_type': '免费/试用额度', 'requires_key': True, 'region': 'CN', 'note': 'GLM Flash 系列常用于低成本测试；额度以智谱控制台为准。'},
-    {'provider': 'DeepSeek', 'provider_id': 'deepseek', 'base_url': 'https://api.deepseek.com/v1', 'model': 'deepseek-chat', 'free_type': '低价/可能有赠送额度', 'requires_key': True, 'region': 'CN', 'note': 'DeepSeek 不承诺长期免费，但常作为低成本代码模型入口。'},
+    # MiMo official
+    {'provider': 'MiMo 官方', 'provider_id': 'mimo_official', 'base_url': '', 'model': 'mimo/mimo-auto', 'display_name': 'mimo/mimo-auto', 'free_type': '官方默认 / 限时免费', 'requires_key': False, 'region': 'CN', 'source': 'MiMo 官方模型列表', 'note': '官方默认模型，推荐首次使用；免费状态以 MiMo 官方账号权益为准。'},
+    {'provider': 'MiMo 官方', 'provider_id': 'mimo_official', 'base_url': '', 'model': 'xiaomi/mimo-v2-flash', 'display_name': 'xiaomi/mimo-v2-flash', 'free_type': '限时免费', 'requires_key': False, 'region': 'CN', 'source': 'MiMo 官方模型列表', 'note': '轻量快速，适合日常代码问答；额度以官方为准。'},
+
+    # QwenPaw provider_manager.py: OPENCODE_MODELS / PROVIDER_OPENCODE
+    {'provider': 'OpenCode', 'provider_id': 'opencode', 'base_url': 'https://opencode.ai/zen/v1', 'model': 'deepseek-v4-flash-free', 'display_name': 'DeepSeek V4 Flash', 'free_type': '免费', 'requires_key': False, 'region': 'Global', 'source': '参考 QwenPaw provider_manager.py', 'note': 'OpenCode 免费 Provider，QwenPaw 标记 require_api_key=False。'},
+    {'provider': 'OpenCode', 'provider_id': 'opencode', 'base_url': 'https://opencode.ai/zen/v1', 'model': 'mimo-v2.5-free', 'display_name': 'Mimo V2.5', 'free_type': '免费', 'requires_key': False, 'region': 'Global', 'source': '参考 QwenPaw provider_manager.py', 'note': 'OpenCode 免费 Provider，QwenPaw 标记 require_api_key=False。'},
+    {'provider': 'OpenCode', 'provider_id': 'opencode', 'base_url': 'https://opencode.ai/zen/v1', 'model': 'nemotron-3-ultra-free', 'display_name': 'Nemotron 3 Ultra', 'free_type': '免费', 'requires_key': False, 'region': 'Global', 'source': '参考 QwenPaw provider_manager.py', 'note': 'OpenCode 免费 Provider，QwenPaw 标记 require_api_key=False。'},
+    {'provider': 'OpenCode', 'provider_id': 'opencode', 'base_url': 'https://opencode.ai/zen/v1', 'model': 'nemotron-3-super-free', 'display_name': 'Nemotron 3 Super', 'free_type': '免费', 'requires_key': False, 'region': 'Global', 'source': '参考 QwenPaw provider_manager.py', 'note': 'OpenCode 免费 Provider，QwenPaw 标记 require_api_key=False。'},
+
+    # QwenPaw provider_manager.py: KILO_MODELS / PROVIDER_KILO
+    {'provider': 'Kilo Code', 'provider_id': 'kilo', 'base_url': 'https://api.kilo.ai/api/gateway', 'model': 'kilo-auto/free', 'display_name': 'Kilo Auto (Free Router)', 'free_type': '免费', 'requires_key': False, 'region': 'Global', 'source': '参考 QwenPaw provider_manager.py', 'note': 'Kilo Code 免费 Provider，QwenPaw 标记 require_api_key=False。'},
+    {'provider': 'Kilo Code', 'provider_id': 'kilo', 'base_url': 'https://api.kilo.ai/api/gateway', 'model': 'nvidia/nemotron-3-ultra-550b-a55b:free', 'display_name': 'Nemotron 3 Ultra 550B', 'free_type': '免费', 'requires_key': False, 'region': 'Global', 'source': '参考 QwenPaw provider_manager.py', 'note': 'Kilo Code 免费 Provider，QwenPaw 标记 require_api_key=False。'},
+    {'provider': 'Kilo Code', 'provider_id': 'kilo', 'base_url': 'https://api.kilo.ai/api/gateway', 'model': 'nvidia/nemotron-3-super-120b-a12b:free', 'display_name': 'Nemotron 3 Super 120B', 'free_type': '免费', 'requires_key': False, 'region': 'Global', 'source': '参考 QwenPaw provider_manager.py', 'note': 'Kilo Code 免费 Provider，QwenPaw 标记 require_api_key=False。'},
+    {'provider': 'Kilo Code', 'provider_id': 'kilo', 'base_url': 'https://api.kilo.ai/api/gateway', 'model': 'poolside/laguna-m.1:free', 'display_name': 'Poolside Laguna M.1', 'free_type': '免费', 'requires_key': False, 'region': 'Global', 'source': '参考 QwenPaw provider_manager.py', 'note': 'Kilo Code 免费 Provider，QwenPaw 标记 require_api_key=False。'},
+    {'provider': 'Kilo Code', 'provider_id': 'kilo', 'base_url': 'https://api.kilo.ai/api/gateway', 'model': 'poolside/laguna-xs.2:free', 'display_name': 'Poolside Laguna XS.2', 'free_type': '免费', 'requires_key': False, 'region': 'Global', 'source': '参考 QwenPaw provider_manager.py', 'note': 'Kilo Code 免费 Provider，QwenPaw 标记 require_api_key=False。'},
+    {'provider': 'Kilo Code', 'provider_id': 'kilo', 'base_url': 'https://api.kilo.ai/api/gateway', 'model': 'stepfun/step-3.7-flash:free', 'display_name': 'Step 3.7 Flash', 'free_type': '免费', 'requires_key': False, 'region': 'Global', 'source': '参考 QwenPaw provider_manager.py', 'note': 'Kilo Code 免费 Provider，QwenPaw 标记 require_api_key=False。'},
+    {'provider': 'Kilo Code', 'provider_id': 'kilo', 'base_url': 'https://api.kilo.ai/api/gateway', 'model': 'nex-agi/nex-n2-pro:free', 'display_name': 'Nex N2 Pro', 'free_type': '免费', 'requires_key': False, 'region': 'Global', 'source': '参考 QwenPaw provider_manager.py', 'note': 'Kilo Code 免费 Provider，QwenPaw 标记 require_api_key=False。'},
+
+    # QwenPaw free-tier providers that require API Key / OAuth
+    {'provider': 'OpenRouter', 'provider_id': 'openrouter', 'base_url': 'https://openrouter.ai/api/v1', 'model': ':free', 'display_name': '连接 OpenRouter 以使用免费模型', 'free_type': '免费模型入口 / 需 Key 或 OAuth', 'requires_key': True, 'region': 'Global', 'source': '参考 QwenPaw PROVIDER_OPENROUTER', 'note': 'OpenRouter 免费模型动态变化；QwenPaw 使用模型发现并按免费标记筛选。'},
+    {'provider': 'GitHub Models', 'provider_id': 'github-models', 'base_url': 'https://models.inference.ai.azure.com', 'model': 'gpt-4o-mini', 'display_name': 'GPT-4o Mini', 'free_type': '免费/试用额度 / 需 GitHub Token', 'requires_key': True, 'region': 'Global', 'source': '参考 QwenPaw GITHUB_MODELS_MODELS', 'note': 'GitHub Models 免费额度以 GitHub 官方政策为准。'},
+    {'provider': 'GitHub Models', 'provider_id': 'github-models', 'base_url': 'https://models.inference.ai.azure.com', 'model': 'gpt-4o', 'display_name': 'GPT-4o', 'free_type': '免费/试用额度 / 需 GitHub Token', 'requires_key': True, 'region': 'Global', 'source': '参考 QwenPaw GITHUB_MODELS_MODELS', 'note': 'GitHub Models 免费额度以 GitHub 官方政策为准。'},
+    {'provider': 'GitHub Models', 'provider_id': 'github-models', 'base_url': 'https://models.inference.ai.azure.com', 'model': 'Meta-Llama-3.1-405B-Instruct', 'display_name': 'Llama 3.1 405B', 'free_type': '免费/试用额度 / 需 GitHub Token', 'requires_key': True, 'region': 'Global', 'source': '参考 QwenPaw GITHUB_MODELS_MODELS', 'note': 'GitHub Models 免费额度以 GitHub 官方政策为准。'},
+    {'provider': 'GitHub Models', 'provider_id': 'github-models', 'base_url': 'https://models.inference.ai.azure.com', 'model': 'Meta-Llama-3.1-8B-Instruct', 'display_name': 'Llama 3.1 8B', 'free_type': '免费/试用额度 / 需 GitHub Token', 'requires_key': True, 'region': 'Global', 'source': '参考 QwenPaw GITHUB_MODELS_MODELS', 'note': 'GitHub Models 免费额度以 GitHub 官方政策为准。'},
+    {'provider': 'Zhipu (BigModel)', 'provider_id': 'zhipu-cn', 'base_url': 'https://open.bigmodel.cn/api/paas/v4', 'model': 'GLM-5-Flash', 'display_name': 'GLM-5 Flash', 'free_type': '免费/试用额度 / 需 API Key', 'requires_key': True, 'region': 'CN', 'source': '参考 QwenPaw PROVIDER_ZHIPU_CN', 'note': 'QwenPaw 标记 is_free_tier=True；具体额度以智谱控制台为准。'},
+    {'provider': 'SiliconFlow (China)', 'provider_id': 'siliconflow-cn', 'base_url': 'https://api.siliconflow.cn/v1', 'model': '', 'display_name': '连接 SiliconFlow (China) 以使用免费模型', 'free_type': '免费模型入口 / 需 API Key', 'requires_key': True, 'region': 'CN', 'source': '参考 QwenPaw PROVIDER_SILICONFLOW_CN', 'note': 'SiliconFlow 免费模型动态变化；模型名以平台模型列表为准。'},
+    {'provider': 'SiliconFlow (International)', 'provider_id': 'siliconflow-intl', 'base_url': 'https://api.siliconflow.com/v1', 'model': '', 'display_name': '连接 SiliconFlow (International) 以使用免费模型', 'free_type': '免费模型入口 / 需 API Key', 'requires_key': True, 'region': 'Global', 'source': '参考 QwenPaw PROVIDER_SILICONFLOW_INTL', 'note': 'SiliconFlow 免费模型动态变化；模型名以平台模型列表为准。'},
 ]
 
 def free_model_library() -> Dict[str, Any]:
@@ -114,8 +133,8 @@ def free_model_library() -> Dict[str, Any]:
         groups.setdefault(str(item.get('provider') or '其他'), []).append(item)
     return {
         'ok': True,
-        'updated_at': '2026-06-15',
-        'notice': '免费/限免/试用状态会随平台策略变化；本页提供常见入口和一键填入，不保证长期免费。',
+        'updated_at': '2026-06-16',
+        'notice': '免费/限免/试用状态会随平台策略变化；本页参考 QwenPaw provider 配置结构整理常见入口和模型名预设，不复制其运行时代码，不保证长期免费。',
         'models': FREE_MODEL_LIBRARY,
         'groups': groups,
     }

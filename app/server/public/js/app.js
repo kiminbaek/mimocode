@@ -1,4 +1,4 @@
-/* MiMo Code fnOS App v0.11.0 */
+/* MiMo Code fnOS App v0.11.1 */
 const $ = s => document.querySelector(s);
 const $$ = s => Array.from(document.querySelectorAll(s));
 const state = { token: localStorage.getItem('mimocode_token') || '', setup: false, status: null, providers: [], presets: [], config: {}, view: 'workspace', sessions: [] };
@@ -118,7 +118,7 @@ async function saveGuideProvider(){
 
 function renderWorkspace(){
   const model=state.config.default_model||'mimo/mimo-auto';
-  const nativeUrl=state.status?.native_web_url||`${location.protocol}//${location.hostname}:5669/`;
+  const nativeUrl=`${location.protocol}//${location.hostname}:5669/`;
   $('#content').innerHTML=`${providerGuide()}<section class="panel hero-panel"><div class="hero-layout"><div><h1>MiMo Code 工作台</h1><p>工作台负责状态、模型、诊断和配置。真正聊天进入独立「官方会话」页面，由官方 mimo web 接管。</p><div class="hero-actions"><button class="btn primary" onclick="navigate('official')">进入官方会话</button><button class="btn ghost" onclick="openNativeWeb()">新窗口打开</button><button class="btn ghost" onclick="copyText('${esc(nativeUrl)}')">复制会话地址</button></div></div><div class="hero-status">${statusCards()}</div></div></section>
   <div class="dashboard-grid">
     <section class="panel"><h3>项目概览</h3><p class="hint">查看当前项目目录、文件类型和识别标记。</p><button class="btn ghost" onclick="navigate('overview')">打开项目概览</button></section>
@@ -136,7 +136,7 @@ async function renderOverview(){
   try{ const r=await api('overview'); $('#overviewBox').innerHTML=`<div class="status-grid">${card('目录',r.project_dir,r.ok?'ok':'warn')}${card('文件扫描',String(r.files_scanned||0),r.ok?'ok':'warn')}${card('目录扫描',String(r.dirs_scanned||0),r.ok?'ok':'warn')}${card('扫描截断',r.truncated?'是':'否',r.truncated?'warn':'ok')}</div><h3>项目标记</h3><p>${(r.markers||[]).map(x=>`<span class="pill">${esc(x)}</span>`).join('')||'未识别到常见项目标记'}</p><h3>文件类型 Top 10</h3><div class="provider-list">${(r.top_extensions||[]).map(x=>`<div class="provider-card"><b>${esc(x[0])}</b><p>${esc(x[1])} 个文件</p></div>`).join('')||'<div class="empty">暂无数据</div>'}</div>`; }catch(e){ $('#overviewBox').textContent=e.message; }
 }
 function renderOfficialChat(){
-  const embedUrl=state.status?.native_web_embed_url||`//${location.hostname}:5669/`;
+  const embedUrl=`${location.protocol}//${location.hostname}:5669/`;
   const content=$('#content');
   content.innerHTML='';
   content.classList.add('official-content');
@@ -144,7 +144,7 @@ function renderOfficialChat(){
   iframe.id='nativeFrame'; iframe.className='official-native-frame'; iframe.src=embedUrl; iframe.title='MiMo 官方会话';
   content.appendChild(iframe);
 }
-function openNativeWeb(){ window.open(state.status?.native_web_url||`${location.protocol}//${location.hostname}:5669/`,'_blank'); }
+function openNativeWeb(){ window.open(`${location.protocol}//${location.hostname}:5669/`,'_blank'); }
 function reloadNativeFrame(){ const f=$('#nativeFrame'); if(f) f.src=f.src; }
 
 async function enableToolboxAndOpenCli(){ if(!state.config.toolbox_enabled){ await api('config',{method:'POST',body:JSON.stringify({toolbox_enabled:true})}); await refreshAll(); } navigate('toolbox'); setTimeout(toolCommand,80); }
@@ -165,7 +165,7 @@ async function renderFreeModels(){
     const r=await api('free-models');
     $('#freeModelNotice').textContent=r.notice||'';
     const groups=r.groups||{};
-    $('#freeModelBox').innerHTML=Object.keys(groups).map(g=>`<div class="model-group"><h3>${esc(g)}</h3><div class="provider-list">${groups[g].map(m=>`<div class="provider-card"><h3>${esc(m.model)} <span class="pill free">${esc(m.free_type)}</span></h3><p>${esc(m.note)}</p><p class="hint">Base URL：${esc(m.base_url||'官方内置')} · ${m.requires_key?'需要 API Key':'无需 API Key'} · ${esc(m.region||'')}</p><div class="actions"><button class="btn compact primary" onclick='useFreeModel(${JSON.stringify(JSON.stringify(m))})'>填入配置</button><button class="btn compact ghost" onclick="copyText('${esc(m.model)}')">复制模型名</button></div></div>`).join('')}</div></div>`).join('');
+    $('#freeModelBox').innerHTML=Object.keys(groups).map(g=>`<div class="model-group"><h3>${esc(g)}</h3><div class="provider-list">${groups[g].map(m=>`<div class="provider-card"><h3>${esc(m.display_name||m.model)} <span class="pill free">${esc(m.free_type)}</span></h3><p>${esc(m.note)}</p><p class="hint">模型 ID：${esc(m.model||'动态发现')} · Base URL：${esc(m.base_url||'官方内置')} · ${m.requires_key?'需要 API Key':'无需 API Key'} · ${esc(m.region||'')}</p><div class="actions"><button class="btn compact primary" onclick='useFreeModel(${JSON.stringify(JSON.stringify(m))})'>填入配置</button><button class="btn compact ghost" onclick="copyText('${esc(m.model)}')">复制模型名</button></div></div>`).join('')}</div></div>`).join('');
   }catch(e){ $('#freeModelBox').textContent=e.message; }
 }
 function useFreeModel(raw){
