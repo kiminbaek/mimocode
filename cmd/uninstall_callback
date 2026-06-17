@@ -1,49 +1,63 @@
 #!/bin/bash
-# MiMo Code uninstall callback v0.11.9
+# MiMo Code uninstall callback v0.12.6
+# - 杀进程
+# - 删 CLI 软链
+# - 勾选清空数据时真正清理 TRIM_PKGVAR
 
+set -u
+
+APP_NAME="mimocode"
+TRIM_PKGVAR="${TRIM_PKGVAR:-/vol3/@appdata/${APP_NAME}}"
 LOG_FILE="${TRIM_PKGVAR}/uninstall.log"
 mkdir -p "${TRIM_PKGVAR}" 2>/dev/null || true
 
 log_msg() {
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG_FILE" 2>/dev/null || true
+    echo "[$(date '+%F %T')] $*" | tee -a "$LOG_FILE" 2>/dev/null || true
 }
 
-log_msg "=== MiMo Code uninstall start ==="
+truthy() {
+    case "$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')" in
+        1|true|yes|y|on) return 0 ;;
+        *) return 1 ;;
+    esac
+}
 
-for pid_file in "${TRIM_PKGVAR}/wrapper.pid" "${TRIM_PKGVAR}/mimo.pid"; do
+want_delete_data() {
+    truthy "${wizard_delete_data:-}" && return 0
+    truthy "${WIZARD_DELETE_DATA:-}" && return 0
+    truthy "${delete_data:-}" && return 0
+    truthy "${DELETE_DATA:-}" && return 0
+    truthy "${clear_data:-}" && return 0
+    truthy "${CLEAR_DATA:-}" && return 0
+    return 1
+}
+
+log_msg "=== uninstall start ==="
+log_msg "env cleanup flags: wizard_delete_data=${wizard_delete_data:-<unset>} WIZARD_DELETE_DATA=${WIZARD_DELETE_DATA:-<unset>} delete_data=${delete_data:-<unset>} DELETE_DATA=${DELETE_DATA:-<unset>} clear_data=${clear_data:-<unset>} CLEAR_DATA=${CLEAR_DATA:-<unset>}"
+
+for pid_file in "${TRIM_PKGVAR}/var/wrapper.pid" "${TRIM_PKGVAR}/var/mimo.pid"; do
     if [ -f "$pid_file" ]; then
         pid=$(cat "$pid_file" 2>/dev/null || true)
-        [ -n "$pid" ] && kill "$pid" 2>/dev/null || true
+        [ -n "${pid:-}" ] && kill "$pid" 2>/dev/null || true
         sleep 0.3
-        [ -n "$pid" ] && kill -9 "$pid" 2>/dev/null || true
-        rm -f "$pid_file"
+        [ -n "${pid:-}" ] && kill -9 "$pid" 2>/dev/null || true
+        rm -f "$pid_file" 2>/dev/null || true
     fi
 done
 pkill -f "uwrapper.py 5670" 2>/dev/null || true
 pkill -f "mimo web.*--port 5669" 2>/dev/null || true
-log_msg "processes stopped"
+log_msg "processes killed"
 
-if [ -L "/usr/local/bin/mimo" ]; then
-    rm -f "/usr/local/bin/mimo" 2>/dev/null || true
-    log_msg "symlink removed: /usr/local/bin/mimo"
-fi
+[ -L /usr/local/bin/mimo ] && rm -f /usr/local/bin/mimo && log_msg "removed /usr/local/bin/mimo"
 
-rm -rf "${TRIM_APPDEST}/bin" "${TRIM_APPDEST}/server" 2>/dev/null || true
-log_msg "target binary/server removed"
-
-DELETE_DATA="${wizard_delete_data:-false}"
-KEEP_CONFIG="${wizard_keep_config:-true}"  # backward compatibility with older wizard
-
-if [ "$DELETE_DATA" = "true" ] || [ "$KEEP_CONFIG" != "true" ]; then
-    rm -rf "${TRIM_PKGVAR}"/* 2>/dev/null || true
-    rm -rf "${TRIM_PKGETC}" 2>/dev/null || true
-    rm -rf "${TRIM_PKGHOME}" 2>/dev/null || true
-    # Legacy profile used before v0.11.6. New profile is under ${TRIM_PKGVAR}/mimo_home.
-    rm -rf "/root/.config/mimocode" "/root/.local/share/mimocode" "/root/.local/state/mimocode" "/root/.cache/mimocode" 2>/dev/null || true
-    log_msg "config and runtime data removed by wizard choice"
+if want_delete_data; then
+    log_msg "user requested data wipe: removing ${TRIM_PKGVAR} contents"
+    # Keep the top directory so fnOS/appcenter path references do not break, but remove all contents including auth/config/mimo_home/logs.
+    find "${TRIM_PKGVAR}" -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null || true
+    # Do not write more logs into TRIM_PKGVAR after wipe.
 else
-    rm -f "${TRIM_PKGVAR}/wrapper.pid" "${TRIM_PKGVAR}/mimo.pid" 2>/dev/null || true
-    log_msg "config and data kept: ${TRIM_PKGETC}, ${TRIM_PKGVAR}, ${TRIM_PKGHOME}"
+    rm -f "${TRIM_PKGVAR}/var/wrapper.pid" "${TRIM_PKGVAR}/var/mimo.pid" 2>/dev/null || true
+    log_msg "user data kept"
 fi
 
 exit 0

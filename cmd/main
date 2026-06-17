@@ -1,27 +1,39 @@
 #!/bin/bash
-# MiMo Code lifecycle v0.8.0
-# start: wrapper UI (5670) + wrapper-managed mimo web (5669)
-# stop: stop wrapper and mimo web
-# status: wrapper port and process health
+# MiMo Code lifecycle v0.12.6
+# - 标准 fnOS 路径（${TRIM_APPDEST} / ${TRIM_PKGVAR}）
+# - wrapper（5670）由本脚本拉起
+# - mimo web（5669）由 wrapper 自己拉起 + supervisor 守护
+
+set -u
 
 APP_NAME="mimocode"
 WRAPPER_PORT="5670"
 MIMO_PORT="5669"
-PID_DIR="/var/apps/mimocode/var"
-WRAPPER_PID="$PID_DIR/wrapper.pid"
-WRAPPER_LOG="$PID_DIR/wrapper.log"
-MIMO_PID="$PID_DIR/mimo.pid"
-WRAPPER_SCRIPT="/var/apps/mimocode/target/server/uwrapper.py"
-LINK_TARGET="/usr/local/bin/mimo"
-APP_BIN="/var/apps/mimocode/target/bin/mimo"
 
-mkdir -p "$PID_DIR" /var/apps/mimocode/etc
+TRIM_APPDEST="${TRIM_APPDEST:-/vol3/@appcenter/${APP_NAME}}"
+TRIM_PKGVAR="${TRIM_PKGVAR:-/vol3/@appdata/${APP_NAME}}"
+
+SERVER_DIR="${TRIM_APPDEST}/server"
+WRAPPER_SCRIPT="${SERVER_DIR}/uwrapper.py"
+MIMO_BIN="${SERVER_DIR}/mimo"
+
+VAR_DIR="${TRIM_PKGVAR}/var"
+ETC_DIR="${TRIM_PKGVAR}/etc"
+WRAPPER_PID="${VAR_DIR}/wrapper.pid"
+WRAPPER_LOG="${VAR_DIR}/wrapper.log"
+MIMO_PID="${VAR_DIR}/mimo.pid"
+MIMO_LOG="${VAR_DIR}/mimo.log"
+
+mkdir -p "${VAR_DIR}" "${ETC_DIR}" "${TRIM_PKGVAR}/mimo_home"
 
 sync_appcenter_status() {
-    local status="$1"
-    local is_stop="true"
-    [ "$status" = "stop" ] && is_stop="true"
-    sudo -u postgres psql -d appcenter -c "UPDATE app SET status='${status}', is_stop=${is_stop}, updated_at=now() WHERE app_name='${APP_NAME}';" >/dev/null 2>&1 || true
+    local s="$1"
+    # fnOS 实测：第三方应用 running 时 is_stop 也应为 true，否则可能桌面无图标/打开无反应。
+    local stop_flag="true"
+    sudo -u postgres psql -d appcenter -c "UPDATE app SET status='${s}', is_stop=${stop_flag}, updated_at=now() WHERE app_name='${APP_NAME}';" >/dev/null 2>&1 || true
+    if [ "$s" = "running" ]; then
+        sudo -u postgres psql -d trim_sac -c "UPDATE entry SET state='running', update_time=now(), updated_at=now() WHERE app_name='${APP_NAME}';" >/dev/null 2>&1 || true
+    fi
 }
 
 port_listening() {
@@ -32,28 +44,33 @@ pid_alive() {
     [ -f "$1" ] && kill -0 "$(cat "$1" 2>/dev/null)" 2>/dev/null
 }
 
-case "$1" in
+case "${1:-}" in
 start)
-    ln -sf "$APP_BIN" "$LINK_TARGET" 2>/dev/null || true
-    if [ ! -x "$APP_BIN" ]; then
-        echo "mimo binary not executable: $APP_BIN" >> "$WRAPPER_LOG"
+    if [ ! -x "$MIMO_BIN" ]; then
+        echo "[$(date '+%F %T')] mimo binary not executable: $MIMO_BIN" >> "$WRAPPER_LOG"
         sync_appcenter_status "stop"
         exit 1
     fi
     if [ ! -f "$WRAPPER_SCRIPT" ]; then
-        echo "wrapper missing: $WRAPPER_SCRIPT" >> "$WRAPPER_LOG"
+        echo "[$(date '+%F %T')] wrapper missing: $WRAPPER_SCRIPT" >> "$WRAPPER_LOG"
         sync_appcenter_status "stop"
         exit 1
     fi
+    # 端口被别人占着 → 拒绝启动
     if port_listening "$WRAPPER_PORT" && ! pid_alive "$WRAPPER_PID"; then
-        echo "port $WRAPPER_PORT already in use by another process" >> "$WRAPPER_LOG"
+        echo "[$(date '+%F %T')] port $WRAPPER_PORT in use by another process" >> "$WRAPPER_LOG"
         sync_appcenter_status "stop"
         exit 1
     fi
-    if ! pid_alive "$WRAPPER_PID"; then
-        nohup python3 "$WRAPPER_SCRIPT" "$WRAPPER_PORT" >> "$WRAPPER_LOG" 2>&1 &
-        echo $! > "$WRAPPER_PID"
+    # 已经在跑 → 同步状态后退出
+    if pid_alive "$WRAPPER_PID" && port_listening "$WRAPPER_PORT"; then
+        sync_appcenter_status "running"
+        exit 0
     fi
+    # 启动 wrapper（wrapper 自己会拉起 mimo web 5669）
+    nohup python3 "$WRAPPER_SCRIPT" "$WRAPPER_PORT" >> "$WRAPPER_LOG" 2>&1 &
+    echo $! > "$WRAPPER_PID"
+    # 等 wrapper 端口起来
     for i in $(seq 1 30); do
         port_listening "$WRAPPER_PORT" && break
         sleep 0.4
@@ -62,10 +79,11 @@ start)
         sync_appcenter_status "running"
         exit 0
     fi
-    echo "wrapper failed to listen on $WRAPPER_PORT" >> "$WRAPPER_LOG"
+    echo "[$(date '+%F %T')] wrapper failed to listen on $WRAPPER_PORT" >> "$WRAPPER_LOG"
     sync_appcenter_status "stop"
     exit 1
     ;;
+
 stop)
     if pid_alive "$WRAPPER_PID"; then
         kill "$(cat "$WRAPPER_PID")" 2>/dev/null || true
@@ -87,6 +105,7 @@ stop)
     sync_appcenter_status "stop"
     exit 0
     ;;
+
 status)
     if pid_alive "$WRAPPER_PID" && port_listening "$WRAPPER_PORT"; then
         exit 0
@@ -94,6 +113,7 @@ status)
     pgrep -f "uwrapper.py $WRAPPER_PORT" >/dev/null 2>&1 && port_listening "$WRAPPER_PORT" && exit 0
     exit 3
     ;;
+
 *)
     echo "Usage: $0 {start|stop|status}" >&2
     exit 1

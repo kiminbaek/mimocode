@@ -4,21 +4,14 @@
     "items": [
       {
         "type": "tips",
-        "helpText": "卸载会停止 Wrapper 和官方 mimo web，并删除应用可执行文件。"
+        "helpText": "卸载会停止 wrapper（5670）和 mimo web（5669），并删除 <code>/usr/local/bin/mimo</code> 软链。"
       },
       {
-        "type": "radio",
+        "type": "switch",
         "field": "wizard_delete_data",
-        "label": "配置与数据处理方式",
+        "label": "同时清除应用数据（Provider/API Key、日志、官方 MiMo 数据库等）",
         "initValue": "false",
-        "options": [
-          {"label": "保留配置与数据，便于下次重装恢复", "value": "false"},
-          {"label": "清除 Wrapper 配置、官方 MiMo profile、日志和运行数据（不可恢复）", "value": "true"}
-        ]
-      },
-      {
-        "type": "tips",
-        "helpText": "如果选择清除数据，将删除应用 var/etc/home 下的数据，以及本应用管理的 MiMo profile。"
+        "helpText": "默认不删，方便重新安装时恢复。开启后将彻底清空数据目录。"
       }
     ]
   }

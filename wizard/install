@@ -4,28 +4,28 @@
     "items": [
       {
         "type": "tips",
-        "helpText": "MiMo Code 是小米官方 AI 编程助手。本 fnOS 应用将官方 MiMo Code 二进制封装为本地 Web 工作台，方便在飞牛 NAS 上启动、配置和诊断。"
+        "helpText": "MiMo Code = 小米官方 AI 编程助手。本应用把官方 mimo 二进制和首次启动所需资源全部预集成进 fpk —— <b>装上即用，无需联网下载</b>。"
       },
       {
         "type": "tips",
-        "helpText": "官方会话由内置 <b>mimo web</b> 提供；Wrapper 只负责本地管理界面、配置同步、日志和状态展示。"
+        "helpText": "桌面会出现 <b>两个图标</b>：<br>① <b>「MiMo Code」</b>（端口 5670）：本地工作台，登录、配置 Provider/API Key、看状态和日志。<br>② <b>「MiMo 官方会话」</b>（端口 5669）：直接打开官方原生聊天界面，由飞牛网关托管，<b>局域网/非局域网均可访问</b>。"
       },
       {
         "type": "tips",
-        "helpText": "请确认：第三方 Provider、模型服务和 API Key 的实际使用条款、费用、限额与隐私政策，以对应服务商和 MiMo 官方实时政策为准。"
+        "helpText": "也可以 SSH 登录飞牛后直接运行 <code>mimo</code> 使用终端版。所有 Provider/API Key 与 mimo 官方 CLI 共享配置。"
       }
     ]
   },
   {
-    "stepTitle": "数据与隐私说明",
+    "stepTitle": "数据与隐私",
     "items": [
       {
         "type": "tips",
-        "helpText": "应用会在本机保存 Wrapper 登录信息、Provider 配置、官方 MiMo profile、运行日志和诊断信息。API Key 会以本地文件形式保存，请仅在可信设备上使用。"
+        "helpText": "本机保存：Wrapper 登录密码、Provider 配置（含 API Key）、官方 MiMo 数据库、日志。请仅在可信设备上使用。"
       },
       {
         "type": "tips",
-        "helpText": "应用不硬编码设备 IP/主机名；官方会话通过本地同源代理访问。卸载时可选择保留或清除配置与数据。"
+        "helpText": "卸载时可选择是否清除数据。Provider/API Key 等密文信息以本地文件形式保存。"
       },
       {
         "type": "switch",

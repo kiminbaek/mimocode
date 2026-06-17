@@ -1,14 +1,21 @@
 {
   ".url": {
-    "mimocode.Application": {
+    "mimocode.app": {
       "title": "MiMo Code",
       "icon": "images/icon_{0}.png",
       "type": "iframe",
       "protocol": "http",
       "port": "5670",
-      "gatewaySocket": "mimocode.sock",
-      "gatewayPrefix": "/app/mimocode",
-      "url": "/app/mimocode",
+      "url": "/",
+      "allUsers": true
+    },
+    "mimocode.web": {
+      "title": "MiMo 官方会话",
+      "icon": "images/icon_{0}.png",
+      "type": "iframe",
+      "protocol": "http",
+      "port": "5669",
+      "url": "/",
       "allUsers": true
     }
   }
